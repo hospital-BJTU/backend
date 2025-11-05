@@ -220,7 +220,7 @@ exports.getUserAppointments = async (req, res) => {
 // 取消预约
 exports.cancelAppointment = async (req, res) => {
   try {
-    const { appointmentId } = req.params;
+    const { apptId } = req.params;
     const { userId } = req.user; // 从JWT中间件获取用户ID
     
     // 开始事务
@@ -229,7 +229,7 @@ exports.cancelAppointment = async (req, res) => {
     try {
       // 查找预约信息
       const appointment = await Appointment.findOne({
-        where: { apptId: appointmentId, userId, isValid: 1 },
+        where: { apptId: apptId, userId, isValid: 1 },
         transaction
       });
       
@@ -294,12 +294,12 @@ exports.cancelAppointment = async (req, res) => {
 // 查询预约详情
 exports.getAppointmentDetail = async (req, res) => {
   try {
-    const { appointmentId } = req.params;
+    const { apptId } = req.params;
     const { userId } = req.user; // 从JWT中间件获取用户ID
     
     // 查询预约详情
     const appointment = await Appointment.findOne({
-      where: { apptId: appointmentId, userId, isValid: 1 },
+      where: { apptId: apptId, userId, isValid: 1 },
       include: [
         {
           model: Schedule,
