@@ -14,9 +14,17 @@ const JWT_EXPIRES_IN = '24h'; // Token过期时间
 exports.getAllUsers = async (req, res) => {
   try {
     const users = await User.findAll();
-    res.status(200).json(users);
+    res.status(200).json({
+      code: 200,
+      message: '查询成功',
+      data: users
+    });
   } catch (error) {
-    res.status(500).json({ message: '获取用户失败', error: error.message });
+    res.status(500).json({
+      code: 500,
+      message: '获取用户失败',
+      data: { error: error.message }
+    });
   }
 };
 
@@ -90,9 +98,8 @@ exports.createUser = async (req, res) => {
     console.error('注册失败错误详情:', error);
     res.status(500).json({
       code: 500,
-      message: '注册失败',
-      data: null,
-      error: error.message // 在开发环境显示错误信息帮助调试
+      message: '服务器内部错误',
+      data: null
     });
   }
 };
@@ -245,7 +252,7 @@ exports.sendVerificationCode = async (req, res) => {
     if (!phone) {
       return res.status(400).json({
         code: 400,
-        message: '请提供手机号',
+        message: '手机号不能为空',
         data: null
       });
     }
@@ -386,7 +393,7 @@ exports.verifyCode = async (req, res) => {
     console.error('验证验证码失败:', error);
     res.status(500).json({
       code: 500,
-      message: '验证验证码失败',
+      message: '服务器内部错误',
       data: null
     });
   }
