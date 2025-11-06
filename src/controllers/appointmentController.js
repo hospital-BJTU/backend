@@ -349,12 +349,10 @@ exports.cancelAppointment = async (req, res) => {
 exports.getAppointmentDetail = async (req, res) => {
   try {
     const { apptId } = req.params;
-    const { apptId } = req.params; // 修改参数名以匹配URL :apptId
     const { userId } = req.user; // 从JWT中间件获取用户ID
     
     // 查询预约详情
     const appointment = await Appointment.findOne({
-      where: { apptId: apptId, userId, isValid: 1 },
       where: { apptId, userId, isValid: 1 },
       include: [
         {

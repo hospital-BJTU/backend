@@ -24,45 +24,45 @@ const AntiHoardingLog = antiHoardingLogModelModule.initiate(sequelize);
 const SmsVerification = smsVerificationModelModule.initiate(sequelize);
 
 // 设置模型之间的关联关系
-// Doctor与User关联
-User.hasOne(Doctor, { foreignKey: 'userId' });
-Doctor.belongsTo(User, { foreignKey: 'userId' });
+// Doctor与User关联 - 使用数据库字段名
+User.hasOne(Doctor, { foreignKey: 'user_id' });
+Doctor.belongsTo(User, { foreignKey: 'user_id' });
 
-// Doctor与Department关联
-Department.hasMany(Doctor, { foreignKey: 'deptId' });
-Doctor.belongsTo(Department, { foreignKey: 'deptId' });
+// Doctor与Department关联 - 使用数据库字段名
+Department.hasMany(Doctor, { foreignKey: 'dept_id' });
+Doctor.belongsTo(Department, { foreignKey: 'dept_id' });
 
 // Doctor与Schedule关联
-Doctor.hasMany(Schedule, { foreignKey: 'doctorId' });
-Schedule.belongsTo(Doctor, { foreignKey: 'doctorId' });
+Doctor.hasMany(Schedule, { foreignKey: 'doctor_id' });
+Schedule.belongsTo(Doctor, { foreignKey: 'doctor_id' });
 
 // AntiHoardingLog与User关联
-User.hasMany(AntiHoardingLog, { foreignKey: 'userId' });
-AntiHoardingLog.belongsTo(User, { foreignKey: 'userId' });
+User.hasMany(AntiHoardingLog, { foreignKey: 'user_id' });
+AntiHoardingLog.belongsTo(User, { foreignKey: 'user_id' });
 
 // CallLog与Appointment关联
-Appointment.hasMany(CallLog, { foreignKey: 'apptId' });
-CallLog.belongsTo(Appointment, { foreignKey: 'apptId' });
+Appointment.hasMany(CallLog, { foreignKey: 'appt_id' });
+CallLog.belongsTo(Appointment, { foreignKey: 'appt_id' });
 
 // CallLog与Doctor关联
-Doctor.hasMany(CallLog, { foreignKey: 'doctorId' });
-CallLog.belongsTo(Doctor, { foreignKey: 'doctorId' });
+Doctor.hasMany(CallLog, { foreignKey: 'doctor_id' });
+CallLog.belongsTo(Doctor, { foreignKey: 'doctor_id' });
 
 // Appointment与Schedule关联
-Schedule.hasMany(Appointment, { foreignKey: 'scheduleId' });
-Appointment.belongsTo(Schedule, { foreignKey: 'scheduleId' });
+Schedule.hasMany(Appointment, { foreignKey: 'schedule_id' });
+Appointment.belongsTo(Schedule, { foreignKey: 'schedule_id' });
 
 // AuditLog与Schedule关联
-Schedule.hasMany(AuditLog, { foreignKey: 'scheduleId' });
-AuditLog.belongsTo(Schedule, { foreignKey: 'scheduleId' });
+Schedule.hasMany(AuditLog, { foreignKey: 'schedule_id' });
+AuditLog.belongsTo(Schedule, { foreignKey: 'schedule_id' });
 
 // AuditLog与User关联（管理员）
-User.hasMany(AuditLog, { as: 'AdminLogs', foreignKey: 'adminId' });
-AuditLog.belongsTo(User, { as: 'Admin', foreignKey: 'adminId' });
+User.hasMany(AuditLog, { as: 'AdminLogs', foreignKey: 'admin_id' });
+AuditLog.belongsTo(User, { as: 'Admin', foreignKey: 'admin_id' });
 
 // Appointment与User关联
-User.hasMany(Appointment, { foreignKey: 'userId' });
-Appointment.belongsTo(User, { foreignKey: 'userId' });
+User.hasMany(Appointment, { foreignKey: 'user_id' });
+Appointment.belongsTo(User, { foreignKey: 'user_id' });
 
 module.exports = {
   sequelize,
