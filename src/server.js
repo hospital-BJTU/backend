@@ -11,7 +11,7 @@ const captchaRoutes = require('./routes/captchaRoutes');
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3000;
 
 // 中间件
 app.use(cors(corsOptions));
@@ -23,7 +23,14 @@ app.use('/api/appointments', appointmentRoutes);
 app.use('/api/captcha', captchaRoutes);
 
 app.get('/', (req, res) => {
-  res.send('医院管理系统后端API');
+  res.json({
+    code: 200,
+    message: '医院管理系统后端API',
+    data: {
+      name: '北交大校医院挂号系统',
+      version: '1.0.0'
+    }
+  });
 });
 
 // 全局错误处理中间件 - 移到这里

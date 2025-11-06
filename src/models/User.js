@@ -41,6 +41,13 @@ const UserModel = {
         defaultValue: 'unverified',
         comment: '核验状态: unverified(未核验), verified(已核验)'
       },
+      phone: {
+        field: 'phone',
+        type: DataTypes.STRING(20),
+        allowNull: false,
+        unique: true,
+        comment: '手机号码'
+      },
       createdAt: {
         field: 'created_at',
         type: DataTypes.DATE,
