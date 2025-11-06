@@ -10,6 +10,7 @@ const appointmentModelModule = require('./Appointment');
 const auditLogModelModule = require('./AuditLog');
 const callLogModelModule = require('./CallLog');
 const antiHoardingLogModelModule = require('./AntiHoardingLog');
+const smsVerificationModelModule = require('./SmsVerification');
 
 // 初始化并获取实际的模型实例
 const User = userModelModule.initiate(sequelize);
@@ -20,6 +21,7 @@ const Appointment = appointmentModelModule.initiate(sequelize);
 const AuditLog = auditLogModelModule.initiate(sequelize);
 const CallLog = callLogModelModule.initiate(sequelize);
 const AntiHoardingLog = antiHoardingLogModelModule.initiate(sequelize);
+const SmsVerification = smsVerificationModelModule.initiate(sequelize);
 
 // 设置模型之间的关联关系
 // Doctor与User关联
@@ -71,5 +73,6 @@ module.exports = {
   Appointment,
   AuditLog,
   CallLog,
-  AntiHoardingLog
+  AntiHoardingLog,
+  SmsVerification
 };

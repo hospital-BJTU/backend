@@ -1,6 +1,7 @@
 const { User } = require('../models');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { sendVerificationSms, verifySmsCode } = require('../utils/smsService');
 require('dotenv').config();
 
 // JWT相关配置
@@ -19,10 +20,12 @@ exports.getAllUsers = async (req, res) => {
   }
 };
 
+
+
 // 创建新用户
 exports.createUser = async (req, res) => {
   try {
-    const { username, password, role } = req.body;
+    const { username, password, role, phone } = req.body;
     
     // 基本验证
     if (!username || !password) {
@@ -31,6 +34,18 @@ exports.createUser = async (req, res) => {
         message: '请填写必填字段',
         data: null
       });
+    }
+    
+    // 验证手机号格式（如果提供）
+    if (phone) {
+      const phoneRegex = /^1[3-9]\d{9}$/;
+      if (!phoneRegex.test(phone)) {
+        return res.status(400).json({
+          code: 400,
+          message: '请输入正确的手机号码',
+          data: null
+        });
+      }
     }
     
     // 密码加密
@@ -45,7 +60,8 @@ exports.createUser = async (req, res) => {
       userId: newUserId,
       username,
       password: hashedPassword,
-      role: role || 'patient'
+      role: role || 'patient',
+      phone: phone || null
       // verifyStatus有默认值'unverified'
     });
     
@@ -80,6 +96,8 @@ exports.createUser = async (req, res) => {
     });
   }
 };
+
+
 
 // 用户登录
 exports.loginUser = async (req, res) => {
@@ -165,6 +183,8 @@ exports.loginUser = async (req, res) => {
   }
 };
 
+
+
 // 用户身份核验
 exports.verifyUser = async (req, res) => {
   try {
@@ -216,3 +236,232 @@ exports.verifyUser = async (req, res) => {
     });
   }
 };
+
+// 发送验证码（忘记密码第一步）
+exports.sendVerificationCode = async (req, res) => {
+  try {
+    const { phone } = req.body;
+    
+    if (!phone) {
+      return res.status(400).json({
+        code: 400,
+        message: '请提供手机号',
+        data: null
+      });
+    }
+    
+    // 验证手机号格式
+    const phoneRegex = /^1[3-9]\\d{9}$/;
+    if (!phoneRegex.test(phone)) {
+      return res.status(400).json({
+        code: 400,
+        message: '请输入正确的手机号码',
+        data: null
+      });
+    }
+    
+    // 查找用户是否存在
+    const user = await User.findOne({ where: { phone } });
+    if (!user) {
+      return res.status(404).json({
+        code: 404,
+        message: '该手机号未注册',
+        data: null
+      });
+    }
+    
+    // 通过smsService发送验证码（会自动存储到数据库）
+    const smsResult = await sendVerificationSms(phone, user.username, 'reset_password');
+    
+    if (!smsResult.success) {
+      return res.status(500).json({
+        code: 500,
+        message: smsResult.error || '发送验证码失败',
+        data: null
+      });
+    }
+    
+    // 生成临时令牌（用于验证身份）
+    const tempToken = jwt.sign(
+      {
+        userId: user.userId,
+        username: user.username,
+        phone: user.phone
+      },
+      JWT_SECRET,
+      { expiresIn: '10m' }
+    );
+    
+    res.status(200).json({
+      code: 200,
+      message: '验证码发送成功',
+      data: {
+        tempToken: tempToken
+      }
+    });
+  } catch (error) {
+    console.error('发送验证码失败:', error);
+    res.status(500).json({
+      code: 500,
+      message: '发送验证码失败',
+      data: null
+    });
+  }
+};
+
+// 验证验证码（忘记密码第二步）
+exports.verifyCode = async (req, res) => {
+  try {
+    const { tempToken, code } = req.body;
+    
+    if (!tempToken || !code) {
+      return res.status(400).json({
+        code: 400,
+        message: '请提供临时令牌和验证码',
+        data: null
+      });
+    }
+    
+    // 验证临时令牌
+    let decoded;
+    try {
+      decoded = jwt.verify(tempToken, JWT_SECRET);
+    } catch (error) {
+      return res.status(401).json({
+        code: 401,
+        message: '无效的临时令牌',
+        data: null
+      });
+    }
+    
+    // 通过smsService验证验证码
+    const verifyResult = await verifySmsCode(decoded.phone, code, 'reset_password');
+    
+    if (!verifyResult.valid) {
+      return res.status(400).json({
+        code: 400,
+        message: verifyResult.error || '验证码错误',
+        data: null
+      });
+    }
+    
+    // 查找用户
+    const user = await User.findOne({ where: { userId: decoded.userId } });
+    if (!user) {
+      return res.status(404).json({
+        code: 404,
+        message: '用户不存在',
+        data: null
+      });
+    }
+    
+    // 验证用户信息一致性
+    if (user.username !== decoded.username || user.phone !== decoded.phone) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户信息不匹配',
+        data: null
+      });
+    }
+    
+    // 生成重置密码令牌
+    const resetToken = jwt.sign(
+      {
+        userId: user.userId,
+        username: user.username,
+        phone: user.phone
+      },
+      JWT_SECRET,
+      { expiresIn: '15m' }
+    );
+    
+    res.status(200).json({
+      code: 200,
+      message: '验证码验证成功',
+      data: {
+        resetToken: resetToken
+      }
+    });
+  } catch (error) {
+    console.error('验证验证码失败:', error);
+    res.status(500).json({
+      code: 500,
+      message: '验证验证码失败',
+      data: null
+    });
+  }
+};
+
+// 重置密码（忘记密码第三步）
+exports.resetPassword = async (req, res) => {
+  try {
+    const { resetToken, newPassword } = req.body;
+    
+    // 基本验证
+    if (!resetToken || !newPassword) {
+      return res.status(400).json({
+        code: 400,
+        message: '请提供重置令牌和新密码',
+        data: null
+      });
+    }
+    
+    // 密码强度验证
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        code: 400,
+        message: '密码长度不能少于6位',
+        data: null
+      });
+    }
+    
+    // 验证重置令牌
+    let decoded;
+    try {
+      decoded = jwt.verify(resetToken, JWT_SECRET);
+    } catch (error) {
+      return res.status(401).json({
+        code: 401,
+        message: '无效的重置令牌',
+        data: null
+      });
+    }
+    
+    // 查找用户
+    const user = await User.findOne({ where: { userId: decoded.userId } });
+    if (!user) {
+      return res.status(404).json({
+        code: 404,
+        message: '用户不存在',
+        data: null
+      });
+    }
+    
+    // 验证用户信息一致性
+    if (user.username !== decoded.username || user.phone !== decoded.phone) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户信息不匹配',
+        data: null
+      });
+    }
+    
+    // 更新密码
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await user.update({ password: hashedPassword });
+    
+    res.status(200).json({
+      code: 200,
+      message: '密码重置成功',
+      data: null
+    });
+  } catch (error) {
+    console.error('重置密码失败:', error);
+    res.status(500).json({
+      code: 500,
+      message: '重置密码失败',
+      data: null
+    });
+  }
+};
+
