@@ -60,12 +60,12 @@ exports.createUser = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     
     // 手动生成user_id - 获取当前最大ID值
-    const maxIdResult = await User.max('userId');
+    const maxIdResult = await User.max('user_id');
     const newUserId = maxIdResult ? maxIdResult + 1 : 1;
     
     // 创建用户
     const user = await User.create({
-      userId: newUserId,
+      user_id: newUserId,
       username,
       password: hashedPassword,
       role: role || 'patient',
@@ -78,7 +78,7 @@ exports.createUser = async (req, res) => {
       code: 201,
       message: '注册成功，请完成身份核验。',
       data: {
-        userId: user.userId,
+        user_id: user.user_id,
         username: user.username,
         role: user.role,
         verifyStatus: user.verifyStatus
@@ -155,6 +155,8 @@ exports.loginUser = async (req, res) => {
       });
     }
     
+    console.log('用户对象信息 (用于生成Token):', JSON.stringify(user));
+
     // 生成JWT token
     const token = jwt.sign(
       {
@@ -173,7 +175,7 @@ exports.loginUser = async (req, res) => {
       data: {
         token,
         user: {
-          userId: user.userId,
+          user_id: user.user_id || user.id,
           username: user.username,
           role: user.role,
           verifyStatus: user.verifyStatus
@@ -196,10 +198,10 @@ exports.loginUser = async (req, res) => {
 exports.verifyUser = async (req, res) => {
   try {
     // 从JWT中间件获取用户ID
-    const { userId } = req.user;
+    const { user_id } = req.user;
      
     // 查找用户
-    const user = await User.findByPk(userId);
+    const user = await User.findByPk(user_id);
     
     if (!user) {
       return res.status(404).json({
@@ -291,7 +293,7 @@ exports.sendVerificationCode = async (req, res) => {
     // 生成临时令牌（用于验证身份）
     const tempToken = jwt.sign(
       {
-        userId: user.userId,
+        user_id: user.user_id,
         username: user.username,
         phone: user.phone
       },
@@ -353,7 +355,7 @@ exports.verifyCode = async (req, res) => {
     }
     
     // 查找用户
-    const user = await User.findOne({ where: { userId: decoded.userId } });
+    const user = await User.findOne({ where: { user_id: decoded.user_id } });
     if (!user) {
       return res.status(404).json({
         code: 404,
@@ -374,7 +376,7 @@ exports.verifyCode = async (req, res) => {
     // 生成重置密码令牌
     const resetToken = jwt.sign(
       {
-        userId: user.userId,
+        user_id: user.user_id,
         username: user.username,
         phone: user.phone
       },
@@ -435,7 +437,7 @@ exports.resetPassword = async (req, res) => {
     }
     
     // 查找用户
-    const user = await User.findOne({ where: { userId: decoded.userId } });
+    const user = await User.findOne({ where: { user_id: decoded.user_id } });
     if (!user) {
       return res.status(404).json({
         code: 404,

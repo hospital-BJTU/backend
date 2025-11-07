@@ -1,13 +1,31 @@
-const { Appointment, Schedule, Doctor, Department, User } = require('../models');
-const { Op } = require('sequelize');
+// 正确导入模型，确保使用初始化后的模型实例
+const models = require('../models');
+const { Op, Transaction } = require('sequelize');
 require('dotenv').config();
+
+// 从初始化后的模型中获取实例
+const Appointment = models.Appointment;
+const Schedule = models.Schedule;
+const Doctor = models.Doctor;
+const Department = models.Department;
+const User = models.User;
 
 // 创建预约（挂号）
 exports.createAppointment = async (req, res) => {
   try {
     const { scheduleId, doctorId, scheduleDate, timeSlot, specificTimeSlot } = req.body;
-    const { userId } = req.user; // 从JWT中间件获取用户ID
+    // 添加兼容层，同时支持userId和user_id
+    const user_id = req.user?.user_id || req.user?.userId;
+    console.log('用户认证信息:', req.user, '使用的user_id:', user_id);
     
+    if (!user_id) {
+      console.error('认证失败: 无法从req.user中获取到有效的user_id');
+      return res.status(401).json({
+        code: 401,
+        message: '用户认证信息缺失或无效，请重新登录',
+        data: null
+      });
+    }
     // 基本验证 - 支持两种方式：1. 直接提供scheduleId  2. 提供doctorId、scheduleDate和timeSlot组合
     if (!scheduleId && (!doctorId || !scheduleDate || !timeSlot)) {
       return res.status(400).json({
@@ -26,30 +44,40 @@ exports.createAppointment = async (req, res) => {
       });
     }
     
-    // 开始事务
-    const transaction = await Schedule.sequelize.transaction();
+    // 开始事务，使用SERIALIZABLE隔离级别以获得最高并发安全性
+    // 使用模型中已配置的sequelize实例，确保一致性
+    const sequelize = models.sequelize;
+    console.log('开始创建预约，用户ID:', user_id, '排班ID:', scheduleId, '医生ID:', doctorId);
+    const transaction = await sequelize.transaction({
+      isolationLevel: Transaction.ISOLATION_LEVELS.SERIALIZABLE
+    });
     
     try {
-      // 查找排班信息
+      // 查找排班信息，使用行级锁定（LOCK IN SHARE MODE）防止其他事务修改
       let schedule;
+      let actualScheduleId;
       
       if (scheduleId) {
         // 通过scheduleId查找排班
         schedule = await Schedule.findOne({
-          where: { scheduleId, auditStatus: 'approved' },
+          where: { schedule_id: scheduleId, audit_status: 'approved' },
+          lock: true, // 在Sequelize中使用行级锁定
           transaction
         });
+        actualScheduleId = scheduleId;
       } else {
         // 通过doctorId、scheduleDate和timeSlot组合查找排班
         schedule = await Schedule.findOne({
           where: { 
-            doctorId, 
-            scheduleDate, 
-            timeSlot,
-            auditStatus: 'approved' 
+            doctor_id: doctorId, 
+            schedule_date: scheduleDate, 
+            time_slot: timeSlot,
+            audit_status: 'approved' 
           },
+          lock: true, // 在Sequelize中使用行级锁定
           transaction
         });
+        actualScheduleId = schedule?.schedule_id;
       }
       
       if (!schedule) {
@@ -61,8 +89,8 @@ exports.createAppointment = async (req, res) => {
         });
       }
       
-      // 检查是否还有号源
-      if (schedule.availableCount <= 0) {
+      // 再次检查是否还有号源（使用锁定后的值，确保一致性）
+      if (schedule.available_count <= 0) {
         await transaction.rollback();
         return res.status(400).json({
           code: 400,
@@ -71,42 +99,80 @@ exports.createAppointment = async (req, res) => {
         });
       }
       
-      // 计算当前患者的顺序号
-      const currentAppointmentsCount = await Appointment.count({
-        where: { scheduleId: schedule.scheduleId, isValid: 1 },
+      // 检查用户是否已经在该排班下有有效的预约（防止重复预约）
+      const existingAppointment = await Appointment.findOne({
+        where: { 
+          user_id: user_id, 
+          schedule_id: actualScheduleId,
+          is_valid: 1
+        },
         transaction
       });
-      const serialNumber = currentAppointmentsCount + 1;
       
-      // 先查询当前最大的apptId值
-      const maxIdResult = await Appointment.sequelize.query(
-        'SELECT COALESCE(MAX(appt_id), 0) + 1 AS nextId FROM tb_appointment',
-        { type: Appointment.sequelize.QueryTypes.SELECT, transaction }
+      if (existingAppointment) {
+        await transaction.rollback();
+        return res.status(400).json({
+          code: 400,
+          message: '您已经在该时间段预约过了，请勿重复预约',
+          data: null
+        });
+      }
+      
+      // 使用原子操作来计算序号和更新号源，避免竞争条件
+      // 1. 原子更新号源数量（减少1）
+      const [updated] = await Schedule.update(
+        { available_count: Schedule.sequelize.literal('available_count - 1') },
+        {
+          where: {
+            schedule_id: actualScheduleId,
+            available_count: { [Op.gt]: 0 } // 确保号源仍然大于0
+          },
+          transaction,
+          returning: true
+        }
       );
-      const nextApptId = maxIdResult[0].nextId;
       
-      // 创建预约记录，手动指定apptId
-      const appointment = await Appointment.create({
-        apptId: nextApptId,
-        userId,
-        scheduleId: schedule.scheduleId,
-        serialNumber,
+      // 检查更新是否成功（如果没有更新成功，说明号源在锁定期间被其他事务占用）
+      if (updated === 0) {
+        await transaction.rollback();
+        return res.status(400).json({
+          code: 400,
+          message: '该时间段号源已被其他用户预约，请刷新页面重新选择',
+          data: null
+        });
+      }
+      
+      // 重新查询更新后的排班信息
+      const updatedSchedule = await Schedule.findOne({
+        where: { schedule_id: actualScheduleId },
+        transaction
+      });
+      
+      // 计算当前患者的顺序号（使用max_count - available_count来计算，更准确）
+      const serialNumber = schedule.max_count - updatedSchedule.available_count;
+      
+      // 改用Sequelize的create方法，让ORM自动处理自增主键
+      const createdAppointment = await Appointment.create({
+        user_id: user_id,
+        schedule_id: actualScheduleId,
+        serial_number: serialNumber,
         status: 'pending',
-        isValid: 1,
-        appointmentTime: new Date()
+        is_valid: 1,
+        appointment_time: new Date()
       }, { transaction });
       
-      // 更新排班余号数
-      await schedule.update({
-        availableCount: schedule.availableCount - 1
-      }, { transaction });
+      // 获取创建后的主键值
+      const apptId = createdAppointment.appt_id;
+      
+      // 构建返回的appointment对象
+      const appointment = { apptId: createdAppointment.appt_id };
       
       // 提交事务
       await transaction.commit();
       
       // 查询完整的预约信息返回给用户
       const fullAppointmentInfo = await Appointment.findOne({
-        where: { apptId: appointment.apptId },
+        where: { appt_id: appointment.apptId },
         include: [
           {
             model: Schedule,
@@ -127,15 +193,15 @@ exports.createAppointment = async (req, res) => {
         code: 201,
         message: '预约成功',
         data: {
-          appointmentId: fullAppointmentInfo.apptId,
+          appointmentId: fullAppointmentInfo.appt_id,
           doctorName: fullAppointmentInfo.Schedule.Doctor.User.username,
-          departmentName: fullAppointmentInfo.Schedule.Doctor.Department.deptName,
-          scheduleDate: fullAppointmentInfo.Schedule.scheduleDate,
-          timeSlot: fullAppointmentInfo.Schedule.timeSlot,
-          specificTimeSlot: specificTimeSlot || null, // 返回具体时间段（如果提供）
-          serialNumber: fullAppointmentInfo.serialNumber,
-          status: fullAppointmentInfo.status,
-          appointmentTime: fullAppointmentInfo.appointmentTime
+          department_name: fullAppointmentInfo.Schedule.Doctor.Department.dept_name,
+        schedule_date: fullAppointmentInfo.Schedule.schedule_date,
+        time_slot: fullAppointmentInfo.Schedule.time_slot,
+        specific_time_slot: specificTimeSlot || null, // 返回具体时间段（如果提供）
+        serial_number: fullAppointmentInfo.serial_number,
+        status: fullAppointmentInfo.status,
+        appointment_time: fullAppointmentInfo.appointment_time
         }
       });
       
@@ -145,10 +211,12 @@ exports.createAppointment = async (req, res) => {
     }
     
   } catch (error) {
-    console.error('预约失败:', error);
+    // 发生错误，记录详细错误信息
+    console.error('预约失败错误详情:', error);
+    // 返回错误信息
     res.status(500).json({
       code: 500,
-      message: '预约过程中发生错误',
+      message: '预约过程中发生错误: ' + (error.message || String(error)),
       data: null
     });
   }
@@ -157,14 +225,14 @@ exports.createAppointment = async (req, res) => {
 // 查询用户的预约列表
 exports.getUserAppointments = async (req, res) => {
   try {
-    const { userId } = req.user; // 从JWT中间件获取用户ID
+    const { user_id } = req.user; // 从JWT中间件获取用户ID
     const { status, page = 1, limit = 10 } = req.query; // 添加分页参数和状态筛选
     
     // 计算偏移量
     const offset = (parseInt(page) - 1) * parseInt(limit);
     
     // 构建查询条件
-    const whereClause = { userId, isValid: 1 };
+    const whereClause = { user_id: user_id, is_valid: 1 };
     if (status) {
       whereClause.status = status;
     }
@@ -205,33 +273,33 @@ exports.getUserAppointments = async (req, res) => {
     });
     
     // 格式化返回数据
-    const formattedAppointments = appointments.map(appt => {
-      // 处理可能为null的关联数据
-      const doctor = appt.Schedule ? appt.Schedule.Doctor : null;
-      const department = doctor ? doctor.Department : null;
-      const user = doctor ? doctor.User : null;
-      
-      return {
-        appointmentId: appt.apptId,
-        userId: appt.userId,
+      const formattedAppointments = appointments.map(appt => {
+        // 处理可能为null的关联数据
+        const doctor = appt.Schedule ? appt.Schedule.Doctor : null;
+        const department = doctor ? doctor.Department : null;
+        const user = doctor ? doctor.User : null;
+        
+        return {
+          appointment_id: appt.appt_id,
+          user_id: appt.user_id,
         // 医生信息
-        doctorId: doctor ? doctor.doctorId : null,
-        doctorName: user ? user.username : '未知医生',
-        doctorTitle: doctor ? doctor.title : null,
+        doctor_id: doctor ? doctor.doctor_id : null,
+        doctor_name: user ? user.username : '未知医生',
+        doctor_title: doctor ? doctor.title : null,
         // 科室信息
-        departmentId: department ? department.deptId : null,
-        departmentName: department ? department.deptName : '未知科室',
+        department_id: department ? department.dept_id : null,
+        department_name: department ? department.dept_name : '未知科室',
         // 排班信息
-        scheduleId: appt.Schedule ? appt.Schedule.scheduleId : null,
-        scheduleDate: appt.Schedule ? appt.Schedule.scheduleDate : null,
-        timeSlot: appt.Schedule ? appt.Schedule.timeSlot : null,
+        schedule_id: appt.Schedule ? appt.Schedule.schedule_id : null,
+        schedule_date: appt.Schedule ? appt.Schedule.schedule_date : null,
+        time_slot: appt.Schedule ? appt.Schedule.time_slot : null,
         // 预约信息
-        serialNumber: appt.serialNumber,
+        serial_number: appt.serial_number,
         status: appt.status,
-        statusDescription: getStatusDescription(appt.status),
-        appointmentTime: appt.appointmentTime,
+        status_description: getStatusDescription(appt.status),
+        appointment_time: appt.appointment_time,
         // 预约创建时间
-        createdAt: appt.appointmentTime // 使用appointmentTime作为创建时间
+        created_at: appt.appointment_time // 使用appointment_time作为创建时间
       };
     });
     
@@ -275,7 +343,7 @@ function getStatusDescription(status) {
 exports.cancelAppointment = async (req, res) => {
   try {
     const { apptId } = req.params;
-    const { userId } = req.user; // 从JWT中间件获取用户ID
+    const { user_id } = req.user; // 从JWT中间件获取用户ID
     
     // 开始事务
     const transaction = await Appointment.sequelize.transaction();
@@ -283,7 +351,7 @@ exports.cancelAppointment = async (req, res) => {
     try {
       // 查找预约信息
       const appointment = await Appointment.findOne({
-        where: { apptId: apptId, userId, isValid: 1 },
+        where: { appt_id: apptId, user_id: user_id, is_valid: 1 },
         transaction
       });
       
@@ -313,9 +381,9 @@ exports.cancelAppointment = async (req, res) => {
       }, { transaction });
       
       // 恢复排班余号数
-      const schedule = await Schedule.findByPk(appointment.scheduleId, { transaction });
+      const schedule = await Schedule.findByPk(appointment.schedule_id, { transaction });
       await schedule.update({
-        availableCount: schedule.availableCount + 1
+        available_count: schedule.available_count + 1
       }, { transaction });
       
       // 提交事务
@@ -325,7 +393,7 @@ exports.cancelAppointment = async (req, res) => {
         code: 200,
         message: '预约取消成功',
         data: {
-          appointmentId: appointment.apptId,
+          appointment_id: appointment.appt_id,
           status: 'cancelled'
         }
       });
@@ -349,11 +417,11 @@ exports.cancelAppointment = async (req, res) => {
 exports.getAppointmentDetail = async (req, res) => {
   try {
     const { apptId } = req.params;
-    const { userId } = req.user; // 从JWT中间件获取用户ID
+    const { user_id } = req.user; // 从JWT中间件获取用户ID
     
     // 查询预约详情
-    const appointment = await Appointment.findOne({
-      where: { apptId, userId, isValid: 1 },
+      const appointment = await Appointment.findOne({
+        where: { appt_id: apptId, user_id: user_id, is_valid: 1 },
       include: [
         {
           model: Schedule,
@@ -391,18 +459,18 @@ exports.getAppointmentDetail = async (req, res) => {
     // 查询相同排班下的其他预约信息（用于显示排队情况）
     const relatedAppointments = await Appointment.findAll({
       where: { 
-        scheduleId: appointment.scheduleId, 
-        isValid: 1,
+        schedule_id: appointment.schedule_id, 
+        is_valid: 1,
         status: { [Op.in]: ['pending', 'called'] }
       },
-      order: [['serialNumber', 'ASC']],
-      attributes: ['serialNumber', 'status'],
+      order: [['serial_number', 'ASC']],
+      attributes: ['serial_number', 'status'],
       limit: 10 // 只显示前10个预约记录
     });
     
     // 计算前面等待人数
     const waitingCount = relatedAppointments.filter(appt => 
-      appt.status === 'pending' && appt.serialNumber < appointment.serialNumber
+      appt.status === 'pending' && appt.serial_number < appointment.serial_number
     ).length;
     
     // 处理关联数据
@@ -413,35 +481,35 @@ exports.getAppointmentDetail = async (req, res) => {
     // 格式化返回数据
     const formattedAppointment = {
       // 预约ID和用户信息
-      appointmentId: appointment.apptId,
-      userId: appointment.userId,
+      appointment_id: appointment.appt_id,
+      user_id: appointment.user_id,
       
       // 医生信息
-      doctorId: doctor.doctorId,
-      doctorName: user.username,
-      doctorTitle: doctor.title,
+      doctor_id: doctor.doctor_id,
+      doctor_name: user.username,
+      doctor_title: doctor.title,
       
       // 科室信息
-      departmentId: department.deptId,
-      departmentName: department.deptName,
+      department_id: department.dept_id,
+      department_name: department.dept_name,
       
       // 排班信息
-      scheduleId: appointment.Schedule.scheduleId,
-      scheduleDate: appointment.Schedule.scheduleDate,
-      timeSlot: appointment.Schedule.timeSlot,
+      schedule_id: appointment.Schedule.schedule_id,
+      schedule_date: appointment.Schedule.schedule_date,
+      time_slot: appointment.Schedule.time_slot,
       
       // 预约信息
-      serialNumber: appointment.serialNumber,
+      serial_number: appointment.serial_number,
       status: appointment.status,
-      statusDescription: getStatusDescription(appointment.status),
-      appointmentTime: appointment.appointmentTime,
+      status_description: getStatusDescription(appointment.status),
+      appointment_time: appointment.appointmentTime,
       
       // 排队信息
-      waitingCount: waitingCount, // 前面等待人数
-      queuePosition: relatedAppointments.findIndex(appt => appt.serialNumber === appointment.serialNumber) + 1,
+      waiting_count: waitingCount, // 前面等待人数
+      queue_position: relatedAppointments.findIndex(appt => appt.serial_number === appointment.serial_number) + 1,
       
       // 添加预计就诊时间（如果可以计算）
-      estimatedTime: appointment.status === 'pending' ? 
+      estimated_time: appointment.status === 'pending' ? 
         calculateEstimatedTime(appointment.Schedule.scheduleDate, appointment.Schedule.timeSlot, waitingCount) : null
     };
     
@@ -485,27 +553,27 @@ exports.getAvailableSchedules = async (req, res) => {
     const { deptId, date, doctorId } = req.query;
     
     // 定义具体时间段映射
-    const timeSlotMapping = {
+    const time_slot_mapping = {
       'AM': ['08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00'],
       'PM': ['14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00']
     };
     
     // 构建查询条件
     const whereClause = {
-      auditStatus: 'approved',
-      availableCount: { [Op.gt]: 0 } // 余号数大于0
+      audit_status: 'approved',
+      available_count: { [Op.gt]: 0 } // 余号数大于0
     };
     
     if (deptId) {
-      whereClause.deptId = deptId;
+      whereClause.dept_id = deptId;
     }
     
     if (date) {
-      whereClause.scheduleDate = date;
+      whereClause.schedule_date = date;
     }
     
     if (doctorId) {
-      whereClause.doctorId = doctorId;
+      whereClause.doctor_id = doctorId;
     }
     
     // 查询可预约的排班
@@ -529,19 +597,19 @@ exports.getAvailableSchedules = async (req, res) => {
     // 格式化返回数据，添加具体时间段选项
     const formattedSchedules = schedules.map(schedule => {
       // 根据班次(AM/PM)获取对应的具体时间段列表
-      const specificTimeSlots = timeSlotMapping[schedule.timeSlot] || [];
+      const specific_time_slots = time_slot_mapping[schedule.time_slot] || [];
       
       return {
-        scheduleId: schedule.scheduleId,
-        doctorId: schedule.Doctor.doctorId,
-        doctorName: schedule.Doctor.User.username,
-        doctorTitle: schedule.Doctor.title,
-        departmentName: schedule.Doctor.Department.deptName,
-        scheduleDate: schedule.scheduleDate,
-        timeSlot: schedule.timeSlot,
-        specificTimeSlots: specificTimeSlots, // 添加具体时间段选项
-        availableCount: schedule.availableCount,
-        maxCount: schedule.maxCount
+        schedule_id: schedule.schedule_id,
+        doctor_id: schedule.Doctor.doctor_id,
+        doctor_name: schedule.Doctor.User.username,
+        doctor_title: schedule.Doctor.title,
+        department_name: schedule.Doctor.Department.dept_name,
+        schedule_date: schedule.schedule_date,
+        time_slot: schedule.time_slot,
+        specific_time_slots: specific_time_slots, // 添加具体时间段选项
+        available_count: schedule.available_count,
+        max_count: schedule.max_count
       };
     });
     
