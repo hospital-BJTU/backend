@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { User } = require('../models');
+const { User } = require('../models'); // 确保导入了 User 模型
 require('dotenv').config();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -16,7 +16,6 @@ const authenticateJWT = async (req, res, next) => {
     });
   }
   
-  // 检查Bearer前缀
   const parts = authHeader.split(' ');
   if (parts.length !== 2 || parts[0] !== 'Bearer') {
     return res.status(401).json({
@@ -32,22 +31,19 @@ const authenticateJWT = async (req, res, next) => {
     // 验证token
     const decoded = jwt.verify(token, JWT_SECRET);
     
-    // 兼容新旧token格式，获取用户ID
-    const userId = decoded.userId || decoded.user_id;
+    // 兼容新旧token格式，获取用户ID (从token payload中)
+    const idFromToken = decoded.user_id || decoded.userId; 
     
-    // 简化验证逻辑，直接使用token中的信息（用于调试）
-    // 这里我们假设token是有效的，直接从token中获取用户信息
-    req.user = {
-      user_id: userId,
-      userId: userId, // 同时设置两种格式以保持兼容性
-      username: decoded.username || 'unknown',
-      role: decoded.role || 'patient'
-    };
+    if (!idFromToken) {
+        return res.status(401).json({
+            code: 401,
+            message: '认证令牌中缺少用户ID信息',
+            data: null
+        });
+    }
     
-    // 暂时注释掉数据库查询，以快速验证问题
-    /*
-    // 查找用户是否存在
-    const user = await User.findByPk(userId);
+    // 启用数据库查询，验证用户存在性和状态
+    const user = await User.findByPk(idFromToken);
     
     if (!user) {
       return res.status(401).json({
@@ -56,28 +52,43 @@ const authenticateJWT = async (req, res, next) => {
         data: null
       });
     }
-    
-    // 将用户信息存储在请求对象中，同时支持user_id和userId以确保兼容性
+
+    // 【关键修复点】安全地从数据库对象中获取用户ID
+    // 兼容 Sequelize 的 user.userId 或 user.user_id 属性
+    const finalUserId = user.userId || user.user_id;
+
+    // 将用户信息存储在请求对象中
     req.user = {
-      user_id: user.user_id,
-      userId: user.user_id, // 保留userId以兼容旧代码
+      // 确保赋值给 appointmentController 依赖的 user_id
+      user_id: finalUserId, 
+      userId: finalUserId, 
       username: user.username,
       role: user.role
     };
-    */
-    console.log('用户信息已设置到req.user:', req.user);
+    
     next();
+    
   } catch (error) {
+    console.error('JWT验证失败:', error.message);
+    
+    // 区分不同类型的JWT错误
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({
         code: 401,
-        message: '认证令牌已过期',
+        message: '认证令牌已过期，请重新登录',
+        data: null
+      });
+    } else if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        code: 401,
+        message: '认证令牌格式错误',
         data: null
       });
     }
-    return res.status(401).json({
+    
+    res.status(401).json({
       code: 401,
-      message: '认证令牌无效',
+      message: '无效的认证令牌',
       data: null
     });
   }
