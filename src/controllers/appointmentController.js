@@ -1,4 +1,4 @@
-const { Appointment, Schedule, Doctor, Department, User } = require('../models');
+const { Appointment, Schedule, Doctor, Department, User, CallLog } = require('../models');
 const { Op } = require('sequelize');
 require('dotenv').config();
 
@@ -270,6 +270,198 @@ function getStatusDescription(status) {
   };
   return statusMap[status] || '未知状态';
 }
+
+// 医生端：叫号
+exports.callAppointmentByDoctor = async (req, res) => {
+  try {
+    const { apptId } = req.params;
+    const { userId, role } = req.user;
+
+    // 角色校验：仅医生可操作
+    if (role !== 'doctor') {
+      return res.status(403).json({
+        code: 403,
+        message: '无权限：仅医生可进行叫号操作',
+        data: null
+      });
+    }
+
+    // 查找医生实体
+    const doctor = await Doctor.findOne({ where: { userId } });
+    if (!doctor) {
+      return res.status(403).json({
+        code: 403,
+        message: '医生信息不存在或未绑定账号',
+        data: null
+      });
+    }
+
+    const transaction = await Appointment.sequelize.transaction();
+    try {
+      // 查找预约并携带排班（校验归属）
+      const appointment = await Appointment.findOne({
+        where: { apptId, isValid: 1 },
+        include: [{ model: Schedule }],
+        transaction
+      });
+
+      if (!appointment) {
+        await transaction.rollback();
+        return res.status(404).json({
+          code: 404,
+          message: '未找到有效的预约记录',
+          data: null
+        });
+      }
+
+      // 校验预约是否属于当前医生的排班
+      if (!appointment.Schedule || appointment.Schedule.doctorId !== doctor.doctorId) {
+        await transaction.rollback();
+        return res.status(403).json({
+          code: 403,
+          message: '无权限：只能操作自己排班下的预约',
+          data: null
+        });
+      }
+
+      // 状态校验：仅待就诊可叫号
+      if (appointment.status !== 'pending') {
+        await transaction.rollback();
+        return res.status(400).json({
+          code: 400,
+          message: '当前预约状态不允许叫号',
+          data: { status: appointment.status, statusDescription: getStatusDescription(appointment.status) }
+        });
+      }
+
+      // 更新状态为已叫号
+      await appointment.update({ status: 'called' }, { transaction });
+
+      // 记录叫号日志
+      await CallLog.create({
+        apptId: appointment.apptId,
+        doctorId: doctor.doctorId,
+        operation: 'called',
+        operationTime: new Date()
+      }, { transaction });
+
+      await transaction.commit();
+
+      return res.status(200).json({
+        code: 200,
+        message: '叫号成功',
+        data: {
+          appointmentId: appointment.apptId,
+          status: 'called',
+          statusDescription: getStatusDescription('called')
+        }
+      });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+  } catch (error) {
+    console.error('医生叫号失败:', error);
+    return res.status(500).json({
+      code: 500,
+      message: '叫号过程中发生错误',
+      data: null
+    });
+  }
+};
+
+// 医生端：标记过号
+exports.markAppointmentMissedByDoctor = async (req, res) => {
+  try {
+    const { apptId } = req.params;
+    const { userId, role } = req.user;
+
+    if (role !== 'doctor') {
+      return res.status(403).json({
+        code: 403,
+        message: '无权限：仅医生可进行过号操作',
+        data: null
+      });
+    }
+
+    const doctor = await Doctor.findOne({ where: { userId } });
+    if (!doctor) {
+      return res.status(403).json({
+        code: 403,
+        message: '医生信息不存在或未绑定账号',
+        data: null
+      });
+    }
+
+    const transaction = await Appointment.sequelize.transaction();
+    try {
+      const appointment = await Appointment.findOne({
+        where: { apptId, isValid: 1 },
+        include: [{ model: Schedule }],
+        transaction
+      });
+
+      if (!appointment) {
+        await transaction.rollback();
+        return res.status(404).json({
+          code: 404,
+          message: '未找到有效的预约记录',
+          data: null
+        });
+      }
+
+      if (!appointment.Schedule || appointment.Schedule.doctorId !== doctor.doctorId) {
+        await transaction.rollback();
+        return res.status(403).json({
+          code: 403,
+          message: '无权限：只能操作自己排班下的预约',
+          data: null
+        });
+      }
+
+      // 业务规则：通常只有已叫号才能标记过号
+      if (appointment.status !== 'called') {
+        await transaction.rollback();
+        return res.status(400).json({
+          code: 400,
+          message: '当前预约状态不允许过号（需先叫号）',
+          data: { status: appointment.status, statusDescription: getStatusDescription(appointment.status) }
+        });
+      }
+
+      await appointment.update({ status: 'missed' }, { transaction });
+
+      await CallLog.create({
+        apptId: appointment.apptId,
+        doctorId: doctor.doctorId,
+        operation: 'missed',
+        operationTime: new Date()
+      }, { transaction });
+
+      await transaction.commit();
+
+      return res.status(200).json({
+        code: 200,
+        message: '已标记过号',
+        data: {
+          appointmentId: appointment.apptId,
+          status: 'missed',
+          statusDescription: getStatusDescription('missed')
+        }
+      });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+  } catch (error) {
+    console.error('医生标记过号失败:', error);
+    return res.status(500).json({
+      code: 500,
+      message: '过号处理过程中发生错误',
+      data: null
+    });
+  }
+};
 
 // 取消预约
 exports.cancelAppointment = async (req, res) => {
