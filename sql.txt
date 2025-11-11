@@ -1,0 +1,149 @@
+SET NAMES utf8mb4;
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- ----------------------------
+-- 区域一：用户与认证管理 (UAC)
+-- ----------------------------
+
+-- 1. tb_user (用户表)
+DROP TABLE IF EXISTS `tb_user`;
+CREATE TABLE `tb_user` (
+  `user_id` INT NOT NULL AUTO_INCREMENT COMMENT '用户ID',
+  `username` VARCHAR(255) UNIQUE NOT NULL COMMENT '用户名，唯一约束',
+  `password` VARCHAR(255) NOT NULL COMMENT '登录密码',
+  `role` ENUM('patient', 'doctor', 'admin') NOT NULL COMMENT '用户角色',
+  `verify_status` ENUM('unverified', 'verified') NOT NULL DEFAULT 'unverified' COMMENT '核验状态',
+  `phone` VARCHAR(20) UNIQUE NOT NULL COMMENT '手机号码',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
+
+-- 2. tb_department (科室表)
+DROP TABLE IF EXISTS `tb_department`;
+CREATE TABLE `tb_department` (
+  `dept_id` INT NOT NULL AUTO_INCREMENT COMMENT '科室ID',
+  `dept_name` VARCHAR(255) UNIQUE NOT NULL COMMENT '科室名称，唯一约束',
+  PRIMARY KEY (`dept_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='科室表';
+
+-- 3. tb_doctor (医生表)
+DROP TABLE IF EXISTS `tb_doctor`;
+CREATE TABLE `tb_doctor` (
+  `doctor_id` INT NOT NULL AUTO_INCREMENT COMMENT '医生ID',
+  `user_id` INT UNIQUE NOT NULL COMMENT '关联 tb_user 的ID，外键且唯一',
+  `dept_id` INT NOT NULL COMMENT '关联 tb_department 的ID，外键',
+  `title` VARCHAR(255) COMMENT '职称',
+  PRIMARY KEY (`doctor_id`),
+  KEY `idx_user_id` (`user_id`),
+  KEY `idx_dept_id` (`dept_id`),
+  CONSTRAINT `fk_doctor_user` FOREIGN KEY (`user_id`) REFERENCES `tb_user` (`user_id`),
+  CONSTRAINT `fk_doctor_department` FOREIGN KEY (`dept_id`) REFERENCES `tb_department` (`dept_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='医生表';
+
+-- ----------------------------
+-- 区域二：核心业务流程管理 (Booking & Scheduling)
+-- ----------------------------
+
+-- 4. tb_schedule (排班表)
+DROP TABLE IF EXISTS `tb_schedule`;
+CREATE TABLE `tb_schedule` (
+  `schedule_id` INT NOT NULL AUTO_INCREMENT COMMENT '排班ID',
+  `doctor_id` INT NOT NULL COMMENT '关联 tb_doctor 的ID，外键',
+  `schedule_date` DATE NOT NULL COMMENT '出诊日期',
+  `time_slot` ENUM('AM', 'PM') NOT NULL COMMENT '时间段: AM(上午), PM(下午)',
+  `max_count` INT NOT NULL COMMENT '最大接诊能力',
+  `available_count` INT NOT NULL COMMENT '当前余号数',
+  `audit_status` ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending' COMMENT '审核状态',
+  PRIMARY KEY (`schedule_id`),
+  UNIQUE KEY `uk_doctor_date_slot` (`doctor_id`, `schedule_date`, `time_slot`),
+  KEY `idx_doctor_id` (`doctor_id`),
+  CONSTRAINT `fk_schedule_doctor` FOREIGN KEY (`doctor_id`) REFERENCES `tb_doctor` (`doctor_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='排班表';
+
+-- 5. tb_appointment (预约表)
+DROP TABLE IF EXISTS `tb_appointment`;
+CREATE TABLE `tb_appointment` (
+  `appt_id` INT NOT NULL AUTO_INCREMENT COMMENT '预约ID',
+  `user_id` INT NOT NULL COMMENT '关联 tb_user 的ID（患者），外键',
+  `schedule_id` INT NOT NULL COMMENT '关联 tb_schedule 的ID，外键',
+  `serial_number` INT NOT NULL COMMENT '叫号顺序号',
+  `status` ENUM('pending', 'called', 'completed', 'missed', 'cancelled') NOT NULL DEFAULT 'pending' COMMENT '预约状态',
+  `is_valid` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否有效 (1: 有效, 0: 无效)',
+  `appointment_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '挂号时间',
+  PRIMARY KEY (`appt_id`),
+  UNIQUE KEY `uk_schedule_serial` (`schedule_id`, `serial_number`),
+  KEY `idx_user_id` (`user_id`),
+  CONSTRAINT `fk_appointment_user` FOREIGN KEY (`user_id`) REFERENCES `tb_user` (`user_id`),
+  CONSTRAINT `fk_appointment_schedule` FOREIGN KEY (`schedule_id`) REFERENCES `tb_schedule` (`schedule_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='预约表';
+
+-- ----------------------------
+-- 区域三：短信验证
+-- ----------------------------
+
+-- 6. tb_sms_verification (短信验证码表)
+DROP TABLE IF EXISTS `tb_sms_verification`;
+CREATE TABLE `tb_sms_verification` (
+  `id` INT NOT NULL AUTO_INCREMENT COMMENT '记录ID',
+  `phone` VARCHAR(20) NOT NULL COMMENT '手机号码',
+  `code` VARCHAR(10) NOT NULL COMMENT '验证码',
+  `type` VARCHAR(50) NOT NULL COMMENT '验证码类型(register/reset_password等)',
+  `is_used` TINYINT(1) DEFAULT 0 COMMENT '是否已使用(0:未使用,1:已使用)',
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `expires_at` DATETIME NOT NULL COMMENT '过期时间',
+  `used_at` DATETIME NULL COMMENT '使用时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_phone_type` (`phone`, `type`),
+  KEY `idx_expires_at` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='短信验证码表';
+
+-- ----------------------------
+-- 区域四：日志与辅助管理 (Log & Admin)
+-- ----------------------------
+
+-- 7. tb_audit_log (审核日志表)
+DROP TABLE IF EXISTS `tb_audit_log`;
+CREATE TABLE `tb_audit_log` (
+  `log_id` INT NOT NULL AUTO_INCREMENT COMMENT '日志ID',
+  `schedule_id` INT NOT NULL COMMENT '关联 tb_schedule 的ID，外键',
+  `admin_id` INT NOT NULL COMMENT '关联 tb_user 的ID（管理员），外键',
+  `audit_result` ENUM('approved', 'rejected') NOT NULL COMMENT '审核结果',
+  `reason` VARCHAR(512) COMMENT '审核原因',
+  `audit_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '审核时间',
+  PRIMARY KEY (`log_id`),
+  KEY `idx_schedule_id` (`schedule_id`),
+  KEY `idx_admin_id` (`admin_id`),
+  CONSTRAINT `fk_audit_schedule` FOREIGN KEY (`schedule_id`) REFERENCES `tb_schedule` (`schedule_id`),
+  CONSTRAINT `fk_audit_admin` FOREIGN KEY (`admin_id`) REFERENCES `tb_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='审核日志表';
+
+-- 8. tb_call_log (叫号日志表)
+DROP TABLE IF EXISTS `tb_call_log`;
+CREATE TABLE `tb_call_log` (
+  `log_id` INT NOT NULL AUTO_INCREMENT COMMENT '日志ID',
+  `appt_id` INT NOT NULL COMMENT '关联 tb_appointment 的ID，外键',
+  `doctor_id` INT NOT NULL COMMENT '关联 tb_doctor 的ID，外键',
+  `operation` ENUM('called', 'missed', 'completed') NOT NULL COMMENT '操作类型',
+  `operation_time` DATETIME NOT NULL COMMENT '操作时间',
+  PRIMARY KEY (`log_id`),
+  KEY `idx_appt_id` (`appt_id`),
+  KEY `idx_doctor_id` (`doctor_id`),
+  CONSTRAINT `fk_call_appointment` FOREIGN KEY (`appt_id`) REFERENCES `tb_appointment` (`appt_id`),
+  CONSTRAINT `fk_call_doctor` FOREIGN KEY (`doctor_id`) REFERENCES `tb_doctor` (`doctor_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='叫号日志表';
+
+-- 9. tb_anti_hoarding_log (防抢号日志表)
+DROP TABLE IF EXISTS `tb_anti_hoarding_log`;
+CREATE TABLE `tb_anti_hoarding_log` (
+  `log_id` INT NOT NULL AUTO_INCREMENT COMMENT '日志ID',
+  `user_id` INT COMMENT '关联 tb_user 的ID，外键',
+  `ip_address` VARCHAR(45) NOT NULL COMMENT 'IP地址',
+  `request_time` DATETIME NOT NULL COMMENT '请求时间',
+  `log_type` ENUM('ip_limit', 'frequency_limit', 'other') NOT NULL COMMENT '日志类型',
+  PRIMARY KEY (`log_id`),
+  KEY `idx_user_id` (`user_id`),
+  CONSTRAINT `fk_hoard_user` FOREIGN KEY (`user_id`) REFERENCES `tb_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='防抢号日志表';
+
+
