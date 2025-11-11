@@ -61,10 +61,12 @@ exports.createAppointment = async (req, res) => {
         // 通过scheduleId查找排班
         schedule = await Schedule.findOne({
           where: { schedule_id: scheduleId, audit_status: 'approved' },
-          lock: true, // 在Sequelize中使用行级锁定
+          lock: transaction.LOCK.UPDATE, // 使用明确的更新锁
           transaction
         });
         actualScheduleId = scheduleId;
+        // 从schedule中提取医生ID
+        actualDoctorId = schedule.doctor_id;
       } else {
         // 通过doctorId、scheduleDate和timeSlot组合查找排班
         schedule = await Schedule.findOne({
@@ -74,10 +76,11 @@ exports.createAppointment = async (req, res) => {
             time_slot: timeSlot,
             audit_status: 'approved' 
           },
-          lock: true, // 在Sequelize中使用行级锁定
+          lock: transaction.LOCK.UPDATE, // 使用明确的更新锁
           transaction
         });
         actualScheduleId = schedule?.schedule_id;
+        actualDoctorId = doctorId;
       }
       
       if (!schedule) {
@@ -148,6 +151,11 @@ exports.createAppointment = async (req, res) => {
         transaction
       });
       
+      // 确保actualDoctorId已设置
+      if (!actualDoctorId && schedule) {
+        actualDoctorId = schedule.doctor_id;
+      }
+      
       // 计算当前患者的顺序号（使用max_count - available_count来计算，更准确）
       const serialNumber = schedule.max_count - updatedSchedule.available_count;
       
@@ -155,6 +163,7 @@ exports.createAppointment = async (req, res) => {
       const createdAppointment = await Appointment.create({
         user_id: user_id,
         schedule_id: actualScheduleId,
+        doctor_id: actualDoctorId, // 添加医生ID
         serial_number: serialNumber,
         status: 'pending',
         is_valid: 1,
@@ -232,7 +241,12 @@ exports.getUserAppointments = async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
     
     // 构建查询条件
-    const whereClause = { user_id: user_id, is_valid: 1 };
+    const whereClause = { 
+      user_id: user_id, 
+      is_valid: 1,
+      // 默认排除已取消的预约
+      ...(!status ? { status: { [Op.ne]: 'cancelled' } } : {})
+    };
     if (status) {
       whereClause.status = status;
     }
@@ -421,7 +435,13 @@ exports.getAppointmentDetail = async (req, res) => {
     
     // 查询预约详情
       const appointment = await Appointment.findOne({
-        where: { appt_id: apptId, user_id: user_id, is_valid: 1 },
+        where: { 
+          appt_id: apptId, 
+          user_id: user_id, 
+          is_valid: 1,
+          // 默认排除已取消的预约
+          status: { [Op.ne]: 'cancelled' }
+        },
       include: [
         {
           model: Schedule,
