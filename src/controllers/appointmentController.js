@@ -901,3 +901,135 @@ exports.getAvailableSchedules = async (req, res) => {
     });
   }
 };
+
+// 医生端队列查询（按排班查看当前队列）
+exports.getDoctorQueue = async (req, res) => {
+  try {
+    const { scheduleId, date, timeSlot, status } = req.query;
+    const { userId, role } = req.user || {};
+
+    // 角色校验
+    if (!role || role !== 'doctor') {
+      return res.status(403).json({
+        code: 403,
+        message: '仅医生可查询本人的就诊队列',
+        data: null
+      });
+    }
+
+    // 查医生档案
+    const doctor = await Doctor.findOne({ where: { userId: userId } });
+    if (!doctor) {
+      return res.status(404).json({
+        code: 404,
+        message: '未找到医生信息',
+        data: null
+      });
+    }
+
+    // 确定排班
+    let scheduleWhere = { doctorId: doctor.doctorId };
+    if (scheduleId) {
+      scheduleWhere.scheduleId = scheduleId;
+    } else if (date && timeSlot) {
+      scheduleWhere.scheduleDate = date;
+      scheduleWhere.timeSlot = timeSlot;
+      scheduleWhere.auditStatus = 'approved';
+    } else {
+      return res.status(400).json({
+        code: 400,
+        message: '请提供 scheduleId 或 (date + timeSlot)',
+        data: null
+      });
+    }
+
+    const schedule = await Schedule.findOne({
+      where: scheduleWhere,
+      include: [
+        {
+          model: Doctor,
+          include: [
+            { model: Department },
+            { model: User, attributes: ['username'] }
+          ]
+        }
+      ]
+    });
+
+    if (!schedule) {
+      return res.status(404).json({
+        code: 404,
+        message: '未找到匹配的排班',
+        data: null
+      });
+    }
+
+    // 状态过滤：默认仅展示 pending + called 作为当前队列
+    let statusFilter;
+    if (status) {
+      const list = Array.isArray(status) ? status : String(status).split(',');
+      statusFilter = { [Op.in]: list };
+    } else {
+      statusFilter = { [Op.in]: ['pending', 'called'] };
+    }
+
+    const appointments = await Appointment.findAll({
+      where: {
+        scheduleId: schedule.scheduleId,
+        isValid: 1,
+        status: statusFilter
+      },
+      include: [
+        { model: User, attributes: ['userId', 'username'] }
+      ],
+      order: [['serialNumber', 'ASC']]
+    });
+
+    // 汇总计数
+    const counts = {
+      pending: appointments.filter(a => a.status === 'pending').length,
+      called: appointments.filter(a => a.status === 'called').length,
+      missed: appointments.filter(a => a.status === 'missed').length,
+      completed: appointments.filter(a => a.status === 'completed').length
+    };
+
+    // 格式化队列
+    const queue = appointments.map(a => ({
+      appointmentId: a.apptId,
+      patientId: a.User.userId,
+      patientName: a.User.username,
+      serialNumber: a.serialNumber,
+      status: a.status,
+      statusDescription: getStatusDescription(a.status),
+      appointmentTime: a.appointmentTime
+    }));
+
+    return res.status(200).json({
+      code: 200,
+      message: '查询成功',
+      data: {
+        schedule: {
+          scheduleId: schedule.scheduleId,
+          scheduleDate: schedule.scheduleDate,
+          timeSlot: schedule.timeSlot,
+          doctorId: schedule.Doctor.doctorId,
+          doctorName: schedule.Doctor.User.username,
+          doctorTitle: schedule.Doctor.title,
+          departmentName: schedule.Doctor.Department.deptName,
+          maxCount: schedule.maxCount,
+          availableCount: schedule.availableCount
+        },
+        counts,
+        queue,
+        total: queue.length
+      }
+    });
+  } catch (error) {
+    console.error('医生队列查询失败:', error);
+    return res.status(500).json({
+      code: 500,
+      message: '查询过程中发生错误',
+      data: null
+    });
+  }
+};

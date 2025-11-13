@@ -137,6 +137,77 @@ curl -X PUT "http://localhost:<PORT>/api/appointments/123/complete" \
   -H "Authorization: Bearer <医生JWT>"
 ```
 
+## 4. 医生队列查询
+
+- 方法与路径：`GET /api/appointments/doctor/queue`
+- 功能：按排班查询当前医生的就诊队列，用于前端列表展示
+
+### 请求
+
+- Query 参数（任选其一）
+  - `scheduleId`：整数，排班ID
+  - `date` + `timeSlot`：日期（`YYYY-MM-DD`）与班次（`AM`/`PM`）
+- 可选参数：
+  - `status`：逗号分隔的状态列表（默认 `pending,called`）
+- Header：
+  - `Authorization: Bearer <医生JWT>`
+
+### 成功响应（200）
+
+```json
+{
+  "code": 200,
+  "message": "查询成功",
+  "data": {
+    "schedule": {
+      "scheduleId": 1,
+      "scheduleDate": "2025-11-13",
+      "timeSlot": "AM",
+      "doctorId": 10,
+      "doctorName": "张三",
+      "doctorTitle": "主任医师",
+      "departmentName": "内科",
+      "maxCount": 30,
+      "availableCount": 12
+    },
+    "counts": {
+      "pending": 8,
+      "called": 3,
+      "missed": 0,
+      "completed": 1
+    },
+    "queue": [
+      {
+        "appointmentId": 1001,
+        "patientId": 501,
+        "patientName": "李四",
+        "serialNumber": 1,
+        "status": "pending",
+        "statusDescription": "待就诊",
+        "appointmentTime": "2025-11-13T01:23:45.000Z"
+      }
+    ],
+    "total": 12
+  }
+}
+```
+
+### 可能错误
+
+- 401 缺少或无效令牌
+- 403 非医生或排班不属于该医生
+- 404 未找到排班
+- 400 参数缺失（未提供 `scheduleId` 或 `date+timeSlot`）
+- 500 服务器内部错误
+
+### 示例（curl）
+
+```bash
+curl -G "http://localhost:<PORT>/api/appointments/doctor/queue" \
+  -H "Authorization: Bearer <医生JWT>" \
+  --data-urlencode "scheduleId=1"
+```
+
 ## 日志与审计
 
 - 每次叫号/过号/接诊完成会在 `tb_call_log` 写入一条记录，字段包括：
