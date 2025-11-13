@@ -11,7 +11,7 @@
 ## 状态流转规则
 
 - `pending` → `called`（叫号）
-- `called` → `missed`（过号）或 `completed`（接诊完成，若后续需要可扩展）
+- `called` → `missed`（过号）或 `completed`（接诊完成）
 - 取消预约由患者端接口处理（`cancelled`），不在本接口范围内
 
 ## 1. 医生叫号
@@ -96,15 +96,58 @@ curl -X PUT "http://localhost:<PORT>/api/appointments/123/miss" \
   -H "Authorization: Bearer <医生JWT>"
 ```
 
+## 3. 接诊完成
+
+- 方法与路径：`PUT /api/appointments/{apptId}/complete`
+- 功能：将预约状态从 `called` 置为 `completed`，并记录一条接诊完成日志
+
+### 请求
+
+- Path 参数：
+  - `apptId`：整数，预约ID
+- Header：
+  - `Authorization: Bearer <医生JWT>`
+
+### 成功响应（200）
+
+```json
+{
+  "code": 200,
+  "message": "已标记接诊完成",
+  "data": {
+    "appointmentId": 123,
+    "status": "completed",
+    "statusDescription": "已完成"
+  }
+}
+```
+
+### 可能错误
+
+- 401 缺少或无效令牌
+- 403 非医生或预约不属于该医生排班
+- 404 预约不存在或已失效
+- 400 状态不允许（例如当前不是 `called`）
+- 500 服务器内部错误
+
+### 示例（curl）
+
+```bash
+curl -X PUT "http://localhost:<PORT>/api/appointments/123/complete" \
+  -H "Authorization: Bearer <医生JWT>"
+```
+
 ## 日志与审计
 
-- 每次叫号/过号会在 `tb_call_log` 写入一条记录，字段包括：
+- 每次叫号/过号/接诊完成会在 `tb_call_log` 写入一条记录，字段包括：
   - `appt_id`（预约ID）
   - `doctor_id`（医生ID）
-  - `operation`（`called` 或 `missed`）
+  - `operation`（`called`、`missed` 或 `completed`）
   - `operation_time`（时间戳）
+
+- 说明：当前数据库结构下 `log_id` 为非自增主键，系统在写入前会查询 `MAX(log_id) + 1` 作为新日志主键，确保与既有记录不冲突。
 
 ## 备注
 
 - `<PORT>` 为后端服务实际运行端口（默认 `3000`），可在 `.env` 或 `server.js` 中配置。
-- 若需要“接诊完成”接口，可新增：`PUT /api/appointments/{apptId}/complete`，规则与上述相似（仅对 `called` 允许），状态置为 `completed` 并记录日志。
+- 已实现接口：`PUT /api/appointments/{apptId}/complete`（仅对 `called` 允许），状态置为 `completed` 并记录日志。

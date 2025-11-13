@@ -24,5 +24,6 @@ router.put('/:apptId/cancel', appointmentController.cancelAppointment);
 // 医生端 - 叫号与过号（需JWT认证，控制器内做角色校验）
 router.put('/:apptId/call', appointmentController.callAppointmentByDoctor);
 router.put('/:apptId/miss', appointmentController.markAppointmentMissedByDoctor);
+router.put('/:apptId/complete', appointmentController.markAppointmentCompletedByDoctor);
 
 module.exports = router;

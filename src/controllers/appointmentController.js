@@ -154,6 +154,112 @@ exports.createAppointment = async (req, res) => {
   }
 };
 
+
+
+// 医生端：标记接诊完成
+exports.markAppointmentCompletedByDoctor = async (req, res) => {
+  try {
+    const { apptId } = req.params;
+    const { userId, role } = req.user;
+
+    // 角色校验
+    if (role !== 'doctor') {
+      return res.status(403).json({
+        code: 403,
+        message: '无权限：仅医生可进行接诊完成操作',
+        data: null
+      });
+    }
+
+    const doctor = await Doctor.findOne({ where: { userId } });
+    if (!doctor) {
+      return res.status(403).json({
+        code: 403,
+        message: '医生信息不存在或未绑定账号',
+        data: null
+      });
+    }
+
+    const transaction = await Appointment.sequelize.transaction();
+    try {
+      const appointment = await Appointment.findOne({
+        where: { apptId, isValid: 1 },
+        include: [{ model: Schedule }],
+        transaction
+      });
+
+      if (!appointment) {
+        await transaction.rollback();
+        return res.status(404).json({
+          code: 404,
+          message: '未找到有效的预约记录',
+          data: null
+        });
+      }
+
+      if (!appointment.Schedule || appointment.Schedule.doctorId !== doctor.doctorId) {
+        await transaction.rollback();
+        return res.status(403).json({
+          code: 403,
+          message: '无权限：只能操作自己排班下的预约',
+          data: null
+        });
+      }
+
+      // 业务规则：只有已叫号的预约可以标记为完成
+      if (appointment.status !== 'called') {
+        await transaction.rollback();
+        return res.status(400).json({
+          code: 400,
+          message: '当前预约状态不允许接诊完成（需先叫号）',
+          data: { status: appointment.status, statusDescription: getStatusDescription(appointment.status) }
+        });
+      }
+
+      await appointment.update({ status: 'completed' }, { transaction });
+
+      // 记录完成日志（数据库无自增，手动分配log_id）
+      const nextCompletedLogIdResult = await CallLog.sequelize.query(
+        'SELECT COALESCE(MAX(log_id), 0) + 1 AS nextId FROM tb_call_log',
+        { type: CallLog.sequelize.QueryTypes.SELECT, transaction }
+      );
+      const nextCompletedLogId = nextCompletedLogIdResult[0].nextId;
+      await CallLog.create({
+        logId: nextCompletedLogId,
+        apptId: appointment.apptId,
+        doctorId: doctor.doctorId,
+        operation: 'completed',
+        operationTime: new Date()
+      }, { transaction });
+
+      await transaction.commit();
+
+      return res.status(200).json({
+        code: 200,
+        message: '已标记接诊完成',
+        data: {
+          appointmentId: appointment.apptId,
+          status: 'completed',
+          statusDescription: getStatusDescription('completed')
+        }
+      });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+  } catch (error) {
+    console.error('医生标记接诊完成失败:', error);
+    return res.status(500).json({
+      code: 500,
+      message: '接诊完成处理过程中发生错误',
+      data: null
+    });
+  }
+};
+
+
+
+
 // 查询用户的预约列表
 exports.getUserAppointments = async (req, res) => {
   try {
@@ -271,6 +377,9 @@ function getStatusDescription(status) {
   return statusMap[status] || '未知状态';
 }
 
+
+
+
 // 医生端：叫号
 exports.callAppointmentByDoctor = async (req, res) => {
   try {
@@ -337,8 +446,14 @@ exports.callAppointmentByDoctor = async (req, res) => {
       // 更新状态为已叫号
       await appointment.update({ status: 'called' }, { transaction });
 
-      // 记录叫号日志
+      // 记录叫号日志（数据库无自增，手动分配log_id）
+      const nextCallLogIdResult = await CallLog.sequelize.query(
+        'SELECT COALESCE(MAX(log_id), 0) + 1 AS nextId FROM tb_call_log',
+        { type: CallLog.sequelize.QueryTypes.SELECT, transaction }
+      );
+      const nextCallLogId = nextCallLogIdResult[0].nextId;
       await CallLog.create({
+        logId: nextCallLogId,
         apptId: appointment.apptId,
         doctorId: doctor.doctorId,
         operation: 'called',
@@ -431,7 +546,14 @@ exports.markAppointmentMissedByDoctor = async (req, res) => {
 
       await appointment.update({ status: 'missed' }, { transaction });
 
+      // 记录过号日志（数据库无自增，手动分配log_id）
+      const nextMissLogIdResult = await CallLog.sequelize.query(
+        'SELECT COALESCE(MAX(log_id), 0) + 1 AS nextId FROM tb_call_log',
+        { type: CallLog.sequelize.QueryTypes.SELECT, transaction }
+      );
+      const nextMissLogId = nextMissLogIdResult[0].nextId;
       await CallLog.create({
+        logId: nextMissLogId,
         apptId: appointment.apptId,
         doctorId: doctor.doctorId,
         operation: 'missed',
