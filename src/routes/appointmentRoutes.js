@@ -12,6 +12,9 @@ router.use(authMiddleware);
 // 创建预约（挂号）- 前端点击预约按钮时调用此接口
 router.post('/', appointmentController.createAppointment);
 
+// 医生端 - 查询本人排班队列
+router.get('/doctor/queue', appointmentController.getDoctorQueue);
+
 // 查询用户的预约列表
 router.get('/user', appointmentController.getUserAppointments);
 
