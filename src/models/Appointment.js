@@ -30,6 +30,12 @@ const AppointmentModel = {
         allowNull: false,
         comment: '叫号顺序号'
       },
+      scheduleDate: {
+        field: 'schedule_date', // 必须匹配数据库列名
+        type: DataTypes.DATEONLY, // 使用 DATEONLY 确保只存储日期
+        allowNull: false, // 必须为 false 以匹配数据库的 NOT NULL 约束
+        comment: '预约的就诊日期'
+      },
       status: {
         field: 'status',
         type: DataTypes.ENUM('pending', 'called', 'completed', 'missed', 'cancelled'),

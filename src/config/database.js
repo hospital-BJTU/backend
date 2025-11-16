@@ -31,7 +31,7 @@ const connectDB = async () => {
     await sequelize.authenticate();
     console.log('MySQL连接成功');
     // 同步数据库模型 - 启用同步以确保表结构正确
-    await sequelize.sync({ alter: false }); // 使用alter: false避免数据截断
+    await sequelize.sync(); 
     console.log('数据库模型已同步');
   } catch (error) {
     console.error('MySQL连接失败:', error);

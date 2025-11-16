@@ -1,26 +1,31 @@
 const express = require('express');
-const cors = require('cors');
-const dotenv = require('dotenv');
-const { connectDB } = require('./config/database');
+const corsPackage = require('cors');
 const corsOptions = require('./config/cors');
-const userRoutes = require('./routes/userRoutes');
-const appointmentRoutes = require('./routes/appointmentRoutes'); 
-const captchaRoutes = require('./routes/captchaRoutes');
+const { connectDB } = require('./config/database');
 
-// 加载环境变量
-dotenv.config();
+// 从环境变量获取端口
+const PORT = process.env.PORT;
+
+// 导入路由
+const userRoutes = require('./routes/userRoutes');
+const captchaRoutes = require('./routes/captchaRoutes');
+// 替换原有的appointmentRoutes，使用新的分离路由
+const userAppointmentRoutes = require('./routes/userAppointmentRoutes');
+const doctorAppointmentRoutes = require('./routes/doctorAppointmentRoutes');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-// 中间件
-app.use(cors(corsOptions));
+// 配置中间件
+app.use(corsPackage(corsOptions));
 app.use(express.json());
 
-// 路由
+// 连接数据库在启动服务器时进行
+// 注册路由
 app.use('/api/users', userRoutes);
-app.use('/api/appointments', appointmentRoutes); 
 app.use('/api/captcha', captchaRoutes);
+// 注册分离后的预约路由
+app.use('/api/user', userAppointmentRoutes);     // 患者端预约路由
+app.use('/api/doctor', doctorAppointmentRoutes); // 医生端预约路由
 
 app.get('/', (req, res) => {
   res.json({

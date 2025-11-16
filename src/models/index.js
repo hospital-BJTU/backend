@@ -64,6 +64,7 @@ AuditLog.belongsTo(User, { as: 'Admin', foreignKey: 'admin_id' });
 User.hasMany(Appointment, { foreignKey: 'user_id' });
 Appointment.belongsTo(User, { foreignKey: 'user_id' });
 
+// 导出模型，同时确保命名一致性
 module.exports = {
   sequelize,
   User,
