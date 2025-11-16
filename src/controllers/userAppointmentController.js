@@ -1,5 +1,6 @@
 const { Appointment, Schedule, Doctor, Department, User } = require('../models');
 const { Op } = require('sequelize');
+require('dotenv').config();
 
 // 创建预约（患者端）
 exports.createAppointment = async (req, res) => {
@@ -27,7 +28,7 @@ exports.createAppointment = async (req, res) => {
     if (existingAppointment) {
       return res.status(400).json({
         code: 400,
-        message: '您已经在该排班下有预约记录，请不要重复预约',
+        message: '具体时间段格式无效',
         data: null
       });
     }
@@ -36,11 +37,27 @@ exports.createAppointment = async (req, res) => {
     const transaction = await Appointment.sequelize.transaction();
     
     try {
-      // 1. 检查排班是否存在且有可用号源
-      const schedule = await Schedule.findOne({
-        where: { scheduleId },
-        transaction
-      });
+      // 查找排班信息
+      let schedule;
+      
+      if (scheduleId) {
+        // 通过scheduleId查找排班
+        schedule = await Schedule.findOne({
+          where: { scheduleId, auditStatus: 'approved' },
+          transaction
+        });
+      } else {
+        // 通过doctorId、scheduleDate和timeSlot组合查找排班
+        schedule = await Schedule.findOne({
+          where: { 
+            doctorId, 
+            scheduleDate, 
+            timeSlot,
+            auditStatus: 'approved' 
+          },
+          transaction
+        });
+      }
       
       if (!schedule || schedule.availableCount <= 0) {
         await transaction.rollback();
@@ -50,84 +67,85 @@ exports.createAppointment = async (req, res) => {
           data: null
         });
       }
-
-      // 2. 为当前排班生成新的序列号
-      let serialNumber;
-      let maxAttempts = 10; // 最大尝试次数
-      let attempts = 0;
       
-      while (attempts < maxAttempts) {
-        // 获取当前最大序列号
-        const maxSerial = await Appointment.max('serialNumber', {
-          where: { scheduleId },
-          transaction
-        });
-        
-        serialNumber = (maxSerial || 0) + 1;
-        
-        // 尝试创建预约记录（包括序列号）
-        try {
-          // 使用Sequelize的create方法（会自动使用数据库自增ID）
-          const appointment = await Appointment.create({
-            userId,
-            scheduleId,
-            serialNumber,
-            status: 'pending',
-            scheduleDate: schedule.scheduleDate,
-            appointmentTime: new Date(),
-            isValid: 1
-          }, { transaction });
-          
-          // 3. 更新排班的可用号源
-          await schedule.update({
-            availableCount: schedule.availableCount - 1
-          }, { transaction });
-          
-          // 4. 提交事务
-          await transaction.commit();
-          
-          // 5. 返回预约信息
-          return res.status(201).json({
-            code: 201,
-            message: '预约成功',
-            data: {
-              appointmentId: appointment.apptId,
-              serialNumber: appointment.serialNumber,
-              scheduleId: appointment.scheduleId,
-              status: appointment.status,
-              statusDescription: getStatusDescription(appointment.status)
-            }
-          });
-        } catch (error) {
-          // 如果是因为序列号冲突导致的错误，继续尝试
-          if (error.name === 'SequelizeUniqueConstraintError') {
-            attempts++;
-            if (attempts >= maxAttempts) {
-              throw new Error('创建预约失败：序列号生成冲突，请稍后重试');
-            }
-            // 短暂延迟后重试
-            await new Promise(resolve => setTimeout(resolve, 100));
-          } else {
-            // 其他错误直接抛出
-            throw error;
-          }
-        }
-      }
-    } catch (error) {
-      // 回滚事务
-      await transaction.rollback();
-      console.error('创建预约事务回滚:', error);
-      return res.status(500).json({
-        code: 500,
-        message: '创建预约过程中发生错误',
-        data: null
+      // 计算当前患者的顺序号
+      const currentAppointmentsCount = await Appointment.count({
+        where: { scheduleId: schedule.scheduleId, isValid: 1 },
+        transaction
       });
+      const serialNumber = currentAppointmentsCount + 1;
+      
+      // 先查询当前最大的apptId值
+      const maxIdResult = await Appointment.sequelize.query(
+        'SELECT COALESCE(MAX(appt_id), 0) + 1 AS nextId FROM tb_appointment',
+        { type: Appointment.sequelize.QueryTypes.SELECT, transaction }
+      );
+      const nextApptId = maxIdResult[0].nextId;
+      
+      // 创建预约记录，手动指定apptId
+      const appointment = await Appointment.create({
+        apptId: nextApptId,
+        userId,
+        scheduleId: schedule.scheduleId,
+        serialNumber,
+        status: 'pending',
+        isValid: 1,
+        appointmentTime: new Date()
+      }, { transaction });
+      
+      // 更新排班余号数
+      await schedule.update({
+        availableCount: schedule.availableCount - 1
+      }, { transaction });
+      
+      // 提交事务
+      await transaction.commit();
+      
+      // 查询完整的预约信息返回给用户
+      const fullAppointmentInfo = await Appointment.findOne({
+        where: { apptId: appointment.apptId },
+        include: [
+          {
+            model: Schedule,
+            include: [
+              {
+                model: Doctor,
+                include: [
+                  { model: Department },
+                  { model: User, attributes: ['username'] }
+                ]
+              }
+            ]
+          }
+        ]
+      });
+      
+      return res.status(201).json({
+        code: 201,
+        message: '预约成功',
+        data: {
+          appointmentId: fullAppointmentInfo.apptId,
+          doctorName: fullAppointmentInfo.Schedule.Doctor.User.username,
+          departmentName: fullAppointmentInfo.Schedule.Doctor.Department.deptName,
+          scheduleDate: fullAppointmentInfo.Schedule.scheduleDate,
+          timeSlot: fullAppointmentInfo.Schedule.timeSlot,
+          specificTimeSlot: specificTimeSlot || null, // 返回具体时间段（如果提供）
+          serialNumber: fullAppointmentInfo.serialNumber,
+          status: fullAppointmentInfo.status,
+          appointmentTime: fullAppointmentInfo.appointmentTime
+        }
+      });
+      
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
     }
+    
   } catch (error) {
     console.error('预约失败:', error);
     res.status(500).json({
       code: 500,
-      message: '预约过程中发生错误: ' + (error.message || String(error)),
+      message: '预约过程中发生错误',
       data: null
     });
   }
@@ -196,8 +214,8 @@ exports.getUserAppointments = async (req, res) => {
       const user = doctor ? doctor.User : null;
       
       return {
-        appointment_id: appt.appt_id,
-        user_id: appt.user_id,
+        appointmentId: appt.apptId,
+        userId: appt.userId,
         // 医生信息
         doctor_id: doctor ? doctor.doctor_id : null,
         doctor_name: user ? user.username : '未知医生',
@@ -243,7 +261,19 @@ exports.getUserAppointments = async (req, res) => {
   }
 };
 
-// 取消预约（患者端）
+// 获取状态描述的辅助函数
+function getStatusDescription(status) {
+  const statusMap = {
+    'pending': '待就诊',
+    'called': '已叫号',
+    'completed': '已完成',
+    'cancelled': '已取消',
+    'missed': '已过号'
+  };
+  return statusMap[status] || '未知状态';
+}
+
+// 取消预约
 exports.cancelAppointment = async (req, res) => {
   try {
     const { apptId } = req.params;
@@ -284,15 +314,11 @@ exports.cancelAppointment = async (req, res) => {
         is_valid: 0
       }, { transaction });
       
-      // 恢复排班余号数（使用原子更新SQL避免并发更新丢失问题）
-      await Schedule.sequelize.query(
-        'UPDATE tb_schedule SET available_count = available_count + 1 WHERE schedule_id = :scheduleId',
-        {
-          replacements: { scheduleId: appointment.schedule_id },
-          transaction,
-          type: Schedule.sequelize.QueryTypes.UPDATE
-        }
-      );
+      // 恢复排班余号数
+      const schedule = await Schedule.findByPk(appointment.scheduleId, { transaction });
+      await schedule.update({
+        availableCount: schedule.availableCount + 1
+      }, { transaction });
       
       // 提交事务
       await transaction.commit();
@@ -329,13 +355,7 @@ exports.getAppointmentDetail = async (req, res) => {
     
     // 查询预约详情
     const appointment = await Appointment.findOne({
-      where: { 
-        appt_id: apptId, 
-        user_id: user_id, 
-        is_valid: 1,
-        // 默认排除已取消的预约
-        status: { [Op.ne]: 'cancelled' }
-      },
+      where: { apptId, userId, isValid: 1 },
       include: [
         {
           model: Schedule,
@@ -527,33 +547,3 @@ exports.getAvailableSchedules = async (req, res) => {
     });
   }
 };
-
-// 获取状态描述的辅助函数
-function getStatusDescription(status) {
-  const statusMap = {
-    'pending': '待就诊',
-    'called': '已叫号',
-    'completed': '已完成',
-    'cancelled': '已取消',
-    'missed': '已过号'
-  };
-  return statusMap[status] || '未知状态';
-}
-
-// 计算预计就诊时间
-function calculateEstimatedTime(scheduleDate, timeSlot, waitingCount) {
-  try {
-    const baseTime = timeSlot === 'AM' ? '09:00' : '14:00';
-    const averageConsultationTime = 15; // 平均就诊时间15分钟
-    const waitingTime = waitingCount * averageConsultationTime;
-    
-    const [hours, minutes] = baseTime.split(':').map(Number);
-    const date = new Date(scheduleDate);
-    date.setHours(hours, minutes + waitingTime);
-    
-    return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-  } catch (error) {
-    console.error('计算预计就诊时间失败:', error);
-    return null;
-  }
-}
