@@ -1,6 +1,50 @@
 const { Appointment, Schedule, Doctor, Department, User, CallLog } = require('../models');
 const { Op } = require('sequelize');
 
+// 获取状态描述的辅助函数
+function getStatusDescription(status) {
+  const statusMap = {
+    'pending': '待就诊',
+    'called': '已叫号',
+    'completed': '已完成',
+    'cancelled': '已取消',
+    'missed': '已过号'
+  };
+  return statusMap[status] || '未知状态';
+}
+
+// 获取排班队列状态的辅助函数
+async function getScheduleStatus(scheduleId) {
+  try {
+    const appointments = await Appointment.findAll({
+      where: { 
+        scheduleId,
+        is_valid: 1,
+        status: { [Op.in]: ['pending', 'called'] }
+      },
+      order: [['apptId', 'ASC']]
+    });
+    
+    const pendingCount = appointments.filter(appt => appt.status === 'pending').length;
+    const calledCount = appointments.filter(appt => appt.status === 'called').length;
+    const currentCalled = appointments.find(appt => appt.status === 'called');
+    
+    return {
+      scheduleId,
+      totalWaiting: appointments.length,
+      pendingCount,
+      calledCount,
+      currentCalled: currentCalled ? {
+        apptId: currentCalled.apptId,
+        waitingNumber: appointments.findIndex(appt => appt.apptId === currentCalled.apptId) + 1
+      } : null
+    };
+  } catch (error) {
+    console.error('获取排班状态失败:', error);
+    return null;
+  }
+}
+
 // 医生端：标记接诊完成
 exports.markAppointmentCompletedByDoctor = async (req, res) => {
   try {
@@ -389,89 +433,95 @@ exports.getDoctorScheduleStatus = async (req, res) => {
       });
     }
     
-    // 为每个排班获取预约信息和叫号状态
-    const schedulesWithStatus = await Promise.all(
-      schedules.map(async (schedule) => {
-        // 获取该排班下的所有有效预约
-        const appointments = await Appointment.findAll({
-          where: {
-            schedule_id: schedule.schedule_id,
-            is_valid: 1
-          },
-          order: [['serial_number', 'ASC']]
-        });
+    // 提取所有schedule_id
+    const scheduleIds = schedules.map(schedule => schedule.schedule_id);
+    
+    // 批量查询所有相关的预约记录（一次查询替代多次查询）
+    const allAppointments = await Appointment.findAll({
+      where: {
+        schedule_id: { [Op.in]: scheduleIds },
+        is_valid: 1
+      },
+      order: [['serial_number', 'ASC']]
+    });
+    
+    // 批量查询最近的叫号日志（一次查询替代多次查询）
+    const recentCallLog = await CallLog.findOne({
+      where: {
+        doctor_id: doctorId
+      },
+      order: [['operation_time', 'DESC']],
+      limit: 1
+    });
+    
+    // 在内存中进行数据聚合和处理
+    const schedulesWithStatus = schedules.map((schedule) => {
+      // 筛选出当前排班的预约记录
+      const scheduleAppointments = allAppointments.filter(
+        appt => appt.schedule_id === schedule.schedule_id
+      );
+      
+      // 计算各种状态的预约数量
+      const calledCount = scheduleAppointments.filter(appt => appt.status === 'called').length;
+      const completedCount = scheduleAppointments.filter(appt => appt.status === 'completed').length;
+      const missedCount = scheduleAppointments.filter(appt => appt.status === 'missed').length;
+      const pendingCount = scheduleAppointments.filter(appt => appt.status === 'pending').length;
+      const cancelledCount = scheduleAppointments.filter(appt => appt.status === 'cancelled').length;
+      
+      // 找出当前应该叫的序号（即第一个pending状态的预约）
+      const currentPending = scheduleAppointments.find(appt => appt.status === 'pending');
+      const currentQueuePosition = currentPending ? currentPending.serial_number : null;
+      
+      // 找出最后一个已叫号的预约
+      const lastCalled = scheduleAppointments.filter(appt => 
+        appt.status === 'called' || appt.status === 'completed' || appt.status === 'missed'
+      ).sort((a, b) => b.serial_number - a.serial_number)[0];
+      const lastCalledNumber = lastCalled ? lastCalled.serial_number : 0;
+      
+      // 获取当前正在被呼叫的预约（called状态）
+      const currentlyCalled = scheduleAppointments.find(appt => appt.status === 'called');
+      
+      return {
+        // 排班基本信息
+        schedule_id: schedule.schedule_id,
+        schedule_date: schedule.schedule_date,
+        time_slot: schedule.time_slot,
+        max_count: schedule.max_count,
         
-        // 计算各种状态的预约数量
-        const calledCount = appointments.filter(appt => appt.status === 'called').length;
-        const completedCount = appointments.filter(appt => appt.status === 'completed').length;
-        const missedCount = appointments.filter(appt => appt.status === 'missed').length;
-        const pendingCount = appointments.filter(appt => appt.status === 'pending').length;
-        const cancelledCount = appointments.filter(appt => appt.status === 'cancelled').length;
+        // 号源库存信息
+        available_count: schedule.available_count,
+        total_appointments: scheduleAppointments.length,
+        remaining_count: schedule.max_count - scheduleAppointments.length,
         
-        // 找出当前应该叫的序号（即第一个pending状态的预约）
-        const currentPending = appointments.find(appt => appt.status === 'pending');
-        const currentQueuePosition = currentPending ? currentPending.serial_number : null;
+        // 叫号状态信息
+        called_count: calledCount,
+        completed_count: completedCount,
+        missed_count: missedCount,
+        pending_count: pendingCount,
+        cancelled_count: cancelledCount,
         
-        // 找出最后一个已叫号的预约
-        const lastCalled = appointments.filter(appt => 
-          appt.status === 'called' || appt.status === 'completed' || appt.status === 'missed'
-        ).sort((a, b) => b.serial_number - a.serial_number)[0];
-        const lastCalledNumber = lastCalled ? lastCalled.serial_number : 0;
+        // 当前叫号顺序信息
+        current_queue_position: currentQueuePosition,
+        last_called_number: lastCalledNumber,
+        next_to_call: currentQueuePosition || (lastCalledNumber + 1),
+        currently_called_appointment: currentlyCalled ? {
+          appointment_id: currentlyCalled.appt_id,
+          serial_number: currentlyCalled.serial_number
+        } : null,
         
-        // 获取当前正在被呼叫的预约（called状态）
-        const currentlyCalled = appointments.find(appt => appt.status === 'called');
+        // 操作日志信息
+        last_operation_time: recentCallLog ? recentCallLog.operationTime : null,
+        last_operation_type: recentCallLog ? recentCallLog.operation : null,
         
-        // 获取最近的叫号日志，用于显示最后一次操作时间
-        const recentCallLog = await CallLog.findOne({
-          where: {
-            doctor_id: doctorId
-          },
-          order: [['operation_time', 'DESC']],
-          limit: 1
-        });
-        
-        return {
-          // 排班基本信息
-          schedule_id: schedule.schedule_id,
-          schedule_date: schedule.schedule_date,
-          time_slot: schedule.time_slot,
-          max_count: schedule.max_count,
-          
-          // 号源库存信息
-          available_count: schedule.available_count,
-          total_appointments: appointments.length,
-          remaining_count: schedule.max_count - appointments.length,
-          
-          // 叫号状态信息
-          called_count: calledCount,
-          completed_count: completedCount,
-          missed_count: missedCount,
-          pending_count: pendingCount,
-          cancelled_count: cancelledCount,
-          
-          // 当前叫号顺序信息
-          current_queue_position: currentQueuePosition,
-          last_called_number: lastCalledNumber,
-          next_to_call: currentQueuePosition || (lastCalledNumber + 1),
-          currently_called_appointment: currentlyCalled ? {
-            appointment_id: currentlyCalled.appt_id,
-            serial_number: currentlyCalled.serial_number
-          } : null,
-          
-          // 操作日志信息
-          last_operation_time: recentCallLog ? recentCallLog.operationTime : null,
-          last_operation_type: recentCallLog ? recentCallLog.operation : null,
-          
-          // 医生信息
-          doctor: {
-            doctor_id: schedule.Doctor.doctor_id,
-            doctor_name: schedule.Doctor.User.username,
-            doctor_title: schedule.Doctor.title,
-            department_name: schedule.Doctor.Department.dept_name
-          }
-        };
-      })
-    );
+        // 医生信息
+        doctor: {
+          doctor_id: schedule.Doctor.doctor_id,
+          doctor_name: schedule.Doctor.User.username,
+          doctor_title: schedule.Doctor.title,
+          department_name: schedule.Doctor.Department.dept_name
+        }
+      };
+    });
     
     return res.status(200).json({
       code: 200,

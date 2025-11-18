@@ -1,6 +1,36 @@
 const { Appointment, Schedule, Doctor, Department, User } = require('../models');
 const { Op } = require('sequelize');
 
+// 获取状态描述的辅助函数
+function getStatusDescription(status) {
+  const statusMap = {
+    'pending': '待就诊',
+    'called': '已叫号',
+    'completed': '已完成',
+    'cancelled': '已取消',
+    'missed': '已过号'
+  };
+  return statusMap[status] || '未知状态';
+}
+
+// 计算预计就诊时间
+function calculateEstimatedTime(scheduleDate, timeSlot, waitingCount) {
+  try {
+    const baseTime = timeSlot === 'AM' ? '09:00' : '14:00';
+    const averageConsultationTime = 15; // 平均就诊时间15分钟
+    const waitingTime = waitingCount * averageConsultationTime;
+    
+    const [hours, minutes] = baseTime.split(':').map(Number);
+    const date = new Date(scheduleDate);
+    date.setHours(hours, minutes + waitingTime);
+    
+    return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+  } catch (error) {
+    console.error('计算预计就诊时间失败:', error);
+    return null;
+  }
+}
+
 // 创建预约（患者端）
 exports.createAppointment = async (req, res) => {
   try {
@@ -36,10 +66,11 @@ exports.createAppointment = async (req, res) => {
     const transaction = await Appointment.sequelize.transaction();
     
     try {
-      // 查找排班信息
+      // 查找排班信息，使用lock: true来确保并发安全
       const schedule = await Schedule.findOne({
         where: { scheduleId, auditStatus: 'approved' },
-        transaction
+        transaction,
+        lock: true
       });
       
       if (!schedule || schedule.availableCount <= 0) {
@@ -51,23 +82,15 @@ exports.createAppointment = async (req, res) => {
         });
       }
       
-      // 计算当前患者的顺序号
-      const currentAppointmentsCount = await Appointment.count({
-        where: { scheduleId: schedule.scheduleId, isValid: 1 },
-        transaction
-      });
-      const serialNumber = currentAppointmentsCount + 1;
-      
-      // 先查询当前最大的apptId值
-      const maxIdResult = await Appointment.sequelize.query(
-        'SELECT COALESCE(MAX(appt_id), 0) + 1 AS nextId FROM tb_appointment',
-        { type: Appointment.sequelize.QueryTypes.SELECT, transaction }
+      // 使用SELECT MAX(serial_number) FOR UPDATE来确保并发安全的序列号计算
+      const maxSerialResult = await Appointment.sequelize.query(
+        'SELECT COALESCE(MAX(serial_number), 0) + 1 AS nextSerial FROM tb_appointment WHERE schedule_id = ? AND is_valid = 1 FOR UPDATE',
+        { replacements: [schedule.scheduleId], type: Appointment.sequelize.QueryTypes.SELECT, transaction }
       );
-      const nextApptId = maxIdResult[0].nextId;
+      const serialNumber = maxSerialResult[0].nextSerial;
       
-      // 创建预约记录，手动指定apptId
+      // 创建预约记录，让数据库自动处理apptId主键自增
       const appointment = await Appointment.create({
-        apptId: nextApptId,
         userId,
         scheduleId: schedule.scheduleId,
         serialNumber,
@@ -128,6 +151,98 @@ exports.createAppointment = async (req, res) => {
     res.status(500).json({
       code: 500,
       message: '预约过程中发生错误',
+      data: null
+    });
+  }
+};
+
+  // 新增：根据科室ID获取有排班的医生列表
+  exports.getDoctorsByDept = async (req, res) => {
+    try {
+    const { deptId, date } = req.query; // 接收科室ID和可选日期
+
+    if (!deptId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：deptId',
+        data: null
+      });
+    }
+
+          // 构建Schedule查询条件 (与原逻辑相同)
+      const scheduleWhere = { 
+        auditStatus: 'approved',
+        availableCount: { [Op.gt]: 0 } // 只显示有余号的排班
+      }; 
+      if (date) {
+        scheduleWhere.scheduleDate = date;
+      }
+
+      const doctors = await Doctor.findAll({
+        where: { deptId },
+        include: [
+          { model: User, attributes: ['username'] }, // 获取医生姓名
+          { 
+            model: Schedule,
+            // 这里的 attributes 可以精简，因为我们只关心是否有排班，不需返回所有排班字段
+            attributes: [], 
+            where: scheduleWhere,
+            required: true // 确保只有有排班的医生才会被返回
+          }
+        ],
+        // attributes: ['doctorId', 'title'], // 移除这行，让 Sequelize 自带 Doctor 的所有属性
+        order: [[User, 'username', 'ASC']], // 按 User 模型中的 username 排序
+        distinct: true, // 关键：使用 distinct 来确保返回唯一的医生
+        col: 'doctorId' // 关键：告知 Sequelize 以 Doctor 的主键进行去重
+      });
+
+    // 格式化返回数据
+    const formattedDoctors = doctors.map(doctor => ({
+      doctorId: doctor.doctorId,
+      doctorName: doctor.User.username,
+      title: doctor.title
+    }));
+
+    return res.status(200).json({
+      code: 200,
+      message: '查询成功',
+      data: {
+        doctors: formattedDoctors
+      }
+    });
+  } catch (error) {
+    console.error('查询医生列表失败:', error);
+    res.status(500).json({
+      code: 500,
+      message: '查询过程中发生错误',
+      data: null
+    });
+  }
+};
+
+
+
+// 新增：获取所有科室列表
+exports.getAllDepartments = async (req, res) => {
+  try {
+    // 逻辑：查询 Department 模型，返回 deptId 和 deptName
+    const departments = await Department.findAll({
+      attributes: ['deptId', 'deptName'],
+      order: [['deptName', 'ASC']]
+    });
+    
+    return res.status(200).json({
+      code: 200,
+      message: '查询成功',
+      data: {
+        departments: departments
+      }
+    });
+  } catch (error) {
+    console.error('查询科室列表失败:', error);
+    res.status(500).json({
+      code: 500,
+      message: '查询过程中发生错误',
       data: null
     });
   }
@@ -199,23 +314,23 @@ exports.getUserAppointments = async (req, res) => {
         appointmentId: appt.apptId,
         userId: appt.userId,
         // 医生信息
-        doctor_id: doctor ? doctor.doctor_id : null,
-        doctor_name: user ? user.username : '未知医生',
-        doctor_title: doctor ? doctor.title : null,
+        doctorId: doctor ? doctor.doctorId : null,
+        doctorName: user ? user.username : '未知医生',
+        doctorTitle: doctor ? doctor.title : null,
         // 科室信息
-        department_id: department ? department.dept_id : null,
-        department_name: department ? department.dept_name : '未知科室',
+        departmentId: department ? department.deptId : null,
+        departmentName: department ? department.deptName : '未知科室',
         // 排班信息
-        schedule_id: appt.Schedule ? appt.Schedule.schedule_id : null,
-        schedule_date: appt.Schedule ? appt.Schedule.schedule_date : null,
-        time_slot: appt.Schedule ? appt.Schedule.time_slot : null,
+        scheduleId: appt.Schedule ? appt.Schedule.scheduleId : null,
+        scheduleDate: appt.Schedule ? appt.Schedule.scheduleDate : null,
+        timeSlot: appt.Schedule ? appt.Schedule.timeSlot : null,
         // 预约信息
-        serial_number: appt.serial_number,
+        serialNumber: appt.serialNumber,
         status: appt.status,
-        status_description: getStatusDescription(appt.status),
-        appointment_time: appt.appointment_time,
+        statusDescription: getStatusDescription(appt.status),
+        appointmentTime: appt.appointmentTime,
         // 预约创建时间
-        created_at: appt.appointment_time // 使用appointment_time作为创建时间
+        createdAt: appt.appointmentTime // 使用appointmentTime作为创建时间
       };
     });
     
@@ -242,36 +357,6 @@ exports.getUserAppointments = async (req, res) => {
     });
   }
 };
-
-// 获取状态描述的辅助函数
-function getStatusDescription(status) {
-  const statusMap = {
-    'pending': '待就诊',
-    'called': '已叫号',
-    'completed': '已完成',
-    'cancelled': '已取消',
-    'missed': '已过号'
-  };
-  return statusMap[status] || '未知状态';
-}
-
-// 计算预计就诊时间
-function calculateEstimatedTime(scheduleDate, timeSlot, waitingCount) {
-  try {
-    const baseTime = timeSlot === 'AM' ? '09:00' : '14:00';
-    const averageConsultationTime = 15; // 平均就诊时间15分钟
-    const waitingTime = waitingCount * averageConsultationTime;
-    
-    const [hours, minutes] = baseTime.split(':').map(Number);
-    const date = new Date(scheduleDate);
-    date.setHours(hours, minutes + waitingTime);
-    
-    return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-  } catch (error) {
-    console.error('计算预计就诊时间失败:', error);
-    return null;
-  }
-}
 
 // 取消预约
 exports.cancelAppointment = async (req, res) => {
@@ -473,27 +558,27 @@ exports.getAvailableSchedules = async (req, res) => {
     const { deptId, date, doctorId } = req.query;
     
     // 定义具体时间段映射
-    const time_slot_mapping = {
+    const timeSlotMapping = {
       'AM': ['08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00'],
       'PM': ['14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00']
     };
     
     // 构建查询条件
     const whereClause = {
-      audit_status: 'approved',
-      available_count: { [Op.gt]: 0 } // 余号数大于0
+      auditStatus: 'approved',
+      availableCount: { [Op.gt]: 0 } // 余号数大于0
     };
     
     if (deptId) {
-      whereClause.dept_id = deptId;
+      whereClause.deptId = deptId;
     }
     
     if (date) {
-      whereClause.schedule_date = date;
+      whereClause.scheduleDate = date;
     }
     
     if (doctorId) {
-      whereClause.doctor_id = doctorId;
+      whereClause.doctorId = doctorId;
     }
     
     // 查询可预约的排班
@@ -509,27 +594,27 @@ exports.getAvailableSchedules = async (req, res) => {
         }
       ],
       order: [
-        ['schedule_date', 'ASC'],
-        ['time_slot', 'ASC']
+        ['scheduleDate', 'ASC'],
+        ['timeSlot', 'ASC']
       ]
     });
     
     // 格式化返回数据，添加具体时间段选项
     const formattedSchedules = schedules.map(schedule => {
       // 根据班次(AM/PM)获取对应的具体时间段列表
-      const specific_time_slots = time_slot_mapping[schedule.time_slot] || [];
+      const specificTimeSlots = timeSlotMapping[schedule.timeSlot] || [];
       
       return {
-        schedule_id: schedule.schedule_id,
-        doctor_id: schedule.Doctor.doctor_id,
-        doctor_name: schedule.Doctor.User.username,
-        doctor_title: schedule.Doctor.title,
-        department_name: schedule.Doctor.Department.dept_name,
-        schedule_date: schedule.schedule_date,
-        time_slot: schedule.time_slot,
-        specific_time_slots: specific_time_slots, // 添加具体时间段选项
-        available_count: schedule.available_count,
-        max_count: schedule.max_count
+        scheduleId: schedule.scheduleId,
+        doctorId: schedule.Doctor.doctorId,
+        doctorName: schedule.Doctor.User.username,
+        doctorTitle: schedule.Doctor.title,
+        departmentName: schedule.Doctor.Department.deptName,
+        scheduleDate: schedule.scheduleDate,
+        timeSlot: schedule.timeSlot,
+        specificTimeSlots: specificTimeSlots, // 添加具体时间段选项
+        availableCount: schedule.availableCount,
+        maxCount: schedule.maxCount
       };
     });
     
@@ -550,4 +635,4 @@ exports.getAvailableSchedules = async (req, res) => {
       data: null
     });
   }
-};
+}
