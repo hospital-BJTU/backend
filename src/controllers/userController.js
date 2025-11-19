@@ -160,7 +160,7 @@ exports.loginUser = async (req, res) => {
     // 生成JWT token
     const token = jwt.sign(
       {
-        userId: user.userId,
+        user_id: user.user_id || user.userId,
         username: user.username,
         role: user.role
       },
@@ -355,7 +355,7 @@ exports.verifyCode = async (req, res) => {
     }
     
     // 查找用户
-    const user = await User.findOne({ where: { user_id: decoded.user_id } });
+    const user = await User.findOne({ where: { user_id: decoded.user_id || decoded.userId } });
     if (!user) {
       return res.status(404).json({
         code: 404,
@@ -437,7 +437,7 @@ exports.resetPassword = async (req, res) => {
     }
     
     // 查找用户
-    const user = await User.findOne({ where: { user_id: decoded.user_id } });
+    const user = await User.findOne({ where: { user_id: decoded.user_id || decoded.userId } });
     if (!user) {
       return res.status(404).json({
         code: 404,
