@@ -3,6 +3,7 @@ const { User } = require('../models');
 require('dotenv').config();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+console.log('使用的JWT_SECRET:', JWT_SECRET); // 添加调试日志
 
 // JWT验证中间件
 const authenticateJWT = async (req, res, next) => {
@@ -68,6 +69,7 @@ const authenticateJWT = async (req, res, next) => {
     console.log('用户信息已设置到req.user:', req.user);
     next();
   } catch (error) {
+    console.log('JWT验证错误:', error.name, error.message); // 添加详细错误日志
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({
         code: 401,
@@ -77,7 +79,7 @@ const authenticateJWT = async (req, res, next) => {
     }
     return res.status(401).json({
       code: 401,
-      message: '认证令牌无效',
+      message: '认证令牌无效: ' + error.message,
       data: null
     });
   }

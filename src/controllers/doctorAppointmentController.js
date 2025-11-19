@@ -752,3 +752,253 @@ exports.getDoctorQueue = async (req, res) => {
     });
   }
 }
+
+// 辅助函数：根据用户ID查找医生ID
+async function getDoctorId(userId) {
+  const doctor = await Doctor.findOne({ where: { user_id: userId } });
+  return doctor ? doctor.doctor_id : null;
+}
+
+// 1. 查询有排班的日期
+exports.getScheduledDates = async (req, res) => {
+  try {
+    // 确保正确获取doctorId查询参数
+    const startMonth = req.query.startMonth;
+    const endMonth = req.query.endMonth;
+    const doctorId = req.query.doctorId;
+    
+    // 验证参数
+    if (!startMonth) {
+      return res.status(400).json({ code: 400, message: '缺少起始月份参数' });
+    }
+    
+    // 确定日期范围
+    // 确保月份格式正确，转换为标准的 YYYY-MM-DD 格式
+    const [year, month] = startMonth.split('-');
+    const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+    
+    // 确定结束日期：如果未提供 endMonth，则默认为 startMonth 的最后一天
+    let endDate;
+    if (endMonth) {
+        const [endYear, endMonthNum] = endMonth.split('-');
+        endDate = new Date(parseInt(endYear), parseInt(endMonthNum) - 1, 1);
+        endDate.setMonth(endDate.getMonth() + 1, 0); // 设置到下个月第一天，再减去1天
+    } else {
+        endDate = new Date(parseInt(year), parseInt(month) - 1, 1);
+        endDate.setMonth(endDate.getMonth() + 1, 0);
+    }
+    const endDateStr = endDate.toISOString().split('T')[0];
+    
+    // 如果提供了doctorId参数，直接使用
+    if (doctorId) {
+      // 使用查询参数中的医生ID
+      const schedules = await Schedule.findAll({
+        attributes: ['schedule_date'],
+        where: {
+          doctor_id: doctorId,
+          schedule_date: {
+            [Op.between]: [startDate, endDateStr]
+          }
+        },
+        group: ['schedule_date'],
+        raw: true
+      });
+      
+      // 确保正确处理日期格式，无论数据库返回的是什么类型
+      const dates = schedules.map(s => {
+        const date = s.schedule_date;
+        if (date instanceof Date) {
+          return date.toISOString().split('T')[0];
+        } else if (typeof date === 'string') {
+          return date.split('T')[0]; // 假设格式为 'YYYY-MM-DDTHH:mm:ss'
+        }
+        return date; // 如果是其他格式，直接返回
+      });
+      return res.status(200).json({ code: 200, message: '查询有排班日期成功', data: dates });
+    }
+    
+    // 否则需要认证用户
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ code: 401, message: '请先登录' });
+    }
+    
+    // 从认证用户获取医生ID
+    let userDoctorId = await getDoctorId(req.user.userId);
+    
+    // 如果用户未关联医生信息，但提供了doctorId参数，则使用参数中的doctorId
+    if (!userDoctorId && doctorId) {
+      userDoctorId = doctorId;
+    } else if (!userDoctorId) {
+      return res.status(403).json({ code: 403, message: '当前用户未关联医生信息，请提供doctorId参数' });
+    }
+    
+    // 使用认证用户的医生ID查询排班
+    const schedules = await Schedule.findAll({
+      attributes: ['schedule_date'],
+      where: {
+        doctor_id: userDoctorId,
+        schedule_date: {
+          [Op.between]: [startDate, endDateStr]
+        }
+      },
+      group: ['schedule_date'],
+      raw: true
+    });
+    
+    // 确保正确处理日期格式，无论数据库返回的是什么类型
+    const dates = schedules.map(s => {
+      const date = s.schedule_date;
+      if (date instanceof Date) {
+        return date.toISOString().split('T')[0];
+      } else if (typeof date === 'string') {
+        return date.split('T')[0]; // 假设格式为 'YYYY-MM-DDTHH:mm:ss'
+      }
+      return date; // 如果是其他格式，直接返回
+    });
+    return res.status(200).json({ code: 200, message: '查询有排班日期成功', data: dates });
+  } catch (error) {
+    console.error('getScheduledDates error:', error);
+    return res.status(500).json({ code: 500, message: '服务器错误' });
+  }
+};
+
+// 2. 查询指定日期的排班详情
+exports.getScheduleDetailsByDate = async (req, res) => {
+  try {
+    const { date, doctorId } = req.query; // 格式: YYYY-MM-DD
+    let userDoctorId;
+    
+    // 验证日期参数
+    if (!date) {
+      return res.status(400).json({ code: 400, message: '缺少日期参数' });
+    }
+    
+    // 如果提供了doctorId参数，直接使用
+    if (doctorId) {
+      userDoctorId = doctorId;
+    } else {
+      // 否则从认证用户获取医生ID
+      const { userId } = req.user;
+      userDoctorId = await getDoctorId(userId);
+      
+      if (!userDoctorId) {
+        return res.status(403).json({ code: 403, message: '当前用户未关联医生信息，请提供doctorId参数' });
+      }
+    }
+
+    const schedules = await Schedule.findAll({
+      where: {
+        doctor_id: userDoctorId,
+        schedule_date: date
+      },
+      order: [['time_slot', 'ASC']]
+    });
+
+    const formattedDetails = await Promise.all(schedules.map(async (schedule) => {
+        // 统计当前排班下已预约人数
+        const pendingAppointments = await Appointment.count({
+            where: {
+                schedule_id: schedule.scheduleId,
+                is_valid: 1,
+                status: { [Op.in]: ['pending', 'called'] }
+            }
+        });
+
+        // 假设 Schedule 模型中新增一个 status 字段: 'Active' / 'Cancelled'
+        const status = schedule.availableCount === 0 && pendingAppointments === 0 ? 'Cancelled' : 'Active';
+
+        return {
+            scheduleId: schedule.scheduleId,
+            timeSlot: schedule.timeSlot,
+            maxCount: schedule.maxCount,
+            availableCount: schedule.availableCount,
+            status: status, 
+            pendingAppointments: pendingAppointments
+        };
+    }));
+
+    return res.status(200).json({ code: 200, message: '查询排班详情成功', data: formattedDetails });
+  } catch (error) {
+    console.error('getScheduleDetailsByDate error:', error);
+    return res.status(500).json({ code: 500, message: '服务器错误' });
+  }
+};
+
+// 3. 医生请假（取消排班）
+exports.requestLeaveForSchedule = async (req, res) => {
+  const { scheduleId } = req.params;
+  const { reason } = req.body;
+  const { userId } = req.user;
+  const doctorId = await getDoctorId(userId);
+
+  if (!doctorId) {
+    return res.status(403).json({ code: 403, message: '医生信息不存在或未绑定账号' });
+  }
+
+  const transaction = await Schedule.sequelize.transaction();
+  try {
+    const schedule = await Schedule.findOne({
+      where: { schedule_id: scheduleId, doctor_id: doctorId }, // 必须校验排班属于当前医生
+      transaction
+    });
+
+    if (!schedule) {
+      await transaction.rollback();
+      return res.status(404).json({ code: 404, message: '未找到该排班记录或无权限操作' });
+    }
+    
+    // **核心逻辑：将排班可预约数归零，并更新状态**
+    
+    // 1. 检查是否有已预约患者 (如果系统要求自动取消并通知，则需要更复杂逻辑)
+    const existingAppointments = await Appointment.findAll({
+        where: { 
+            schedule_id: scheduleId, 
+            is_valid: 1, 
+            status: { [Op.in]: ['pending', 'called'] } 
+        },
+        transaction 
+    });
+
+    if (existingAppointments.length > 0) {
+        // 实际场景应是：强制取消这些预约并通知用户。这里我们简化处理：
+        await Appointment.update({ 
+            status: 'cancelled', 
+            cancel_reason: `医生请假: ${reason || '无具体原因'}` 
+        }, { 
+            where: { 
+                schedule_id: scheduleId, 
+                is_valid: 1, 
+                status: { [Op.in]: ['pending', 'called'] } 
+            }, 
+            transaction 
+        });
+        // ⚠️ 实际项目中，这里需要添加通知服务 (短信/站内信)
+        console.warn(`强制取消了 ${existingAppointments.length} 个预约: Schedule ID ${scheduleId}`);
+    }
+
+    // 2. 更新排班状态：可预约数归零，并新增一个状态字段（若模型支持）
+    const updatedSchedule = await schedule.update({
+      available_count: 0,
+      // 假设您的Schedule模型新增了 status 或 is_cancelled_by_doctor 字段
+      // status: 'Cancelled', 
+      // reason_for_cancellation: reason 
+    }, { transaction });
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      code: 200,
+      message: '排班取消成功，相关预约已处理',
+      data: {
+        scheduleId: updatedSchedule.schedule_id,
+        newAvailableCount: updatedSchedule.available_count,
+        // status: 'Cancelled' // 如果模型有此字段则返回
+      }
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error('requestLeaveForSchedule error:', error);
+    return res.status(500).json({ code: 500, message: '服务器错误，请假失败' });
+  }
+};
