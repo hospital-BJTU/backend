@@ -1,6 +1,17 @@
 const express = require('express');
 const corsPackage = require('cors');
-const corsOptions = require('./config/cors');
+
+// 根据环境变量或默认值选择CORS配置
+const NODE_ENV = process.env.NODE_ENV || 'development';
+// 尝试加载cors-dev，如果不存在则使用cors
+let corsOptions;
+try {
+  corsOptions = require('./config/cors-dev');
+  console.log('使用cors-dev配置');
+} catch (error) {
+  corsOptions = require('./config/cors');
+  console.log('使用cors配置');
+}
 const { connectDB } = require('./config/database');
 
 // 从环境变量获取端口

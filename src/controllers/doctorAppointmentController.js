@@ -1,5 +1,7 @@
 const { Appointment, Schedule, Doctor, Department, User, CallLog } = require('../models');
 const { Op } = require('sequelize');
+// 定义排班最大人数的默认下限值
+const MIN_MAX_COUNT = 10;
 
 // 获取状态描述的辅助函数
 function getStatusDescription(status) {
@@ -924,97 +926,141 @@ exports.getScheduleDetailsByDate = async (req, res) => {
   }
 };
 
-// 3. 医生请假（取消排班）
+// 医生端：发起请假请求 (修改现有逻辑)
 exports.requestLeaveForSchedule = async (req, res) => {
-  const { scheduleId } = req.params; // 排班ID是从URL路径中获取的
-  const { reason } = req.body;
-  const { userId, role } = req.user;
-
-  // 1. 角色和身份校验 (已解决)
-  if (role !== 'doctor') {
-    return res.status(403).json({ code: 403, message: '无权限：仅医生可进行请假操作' });
-  }
-
-  const doctor = await Doctor.findOne({ where: { userId: userId } }); // 假设已修正为 userId
-  if (!doctor) {
-    return res.status(403).json({ code: 403, message: '医生信息不存在或未绑定账号' });
-  }
-  
-  const doctorId = doctor.doctorId; // 假设模型属性是 doctorId (驼峰)
-
-  // 确保排班ID是数字
-  const parsedScheduleId = parseInt(scheduleId, 10);
-  if (isNaN(parsedScheduleId)) {
-    return res.status(400).json({ code: 400, message: '排班ID格式错误' });
-  }
-  
-  const transaction = await Appointment.sequelize.transaction();
-  
-  try {
-    // 2. 查找排班记录并校验权限 (重点检查：scheduleId 和 doctorId 的字段名)
-    const schedule = await Schedule.findOne({
-      where: {
-        scheduleId: parsedScheduleId, 
-        doctorId: doctorId // 关键校验：排班必须属于当前医生
-      },
-      transaction
-    });
-
-    // ！！！ 关键日志，请检查终端输出 ！！！
-    console.log(`[DEBUG 请假] 医生ID: ${doctorId}, 尝试请假排班ID: ${parsedScheduleId}`);
+    const { scheduleId } = req.params;
+    const { reason } = req.body; // 请假原因
+    const { userId, role } = req.user;
     
-    if (!schedule) {
-      await transaction.rollback();
-      // 这里的 404 很可能就是因为 scheduleId 和 doctorId 不匹配！
-      return res.status(404).json({ code: 404, message: '未找到该排班记录或无权限操作' });
+    // 1. 角色与ID校验
+    if (role !== 'doctor') {
+        return res.status(403).json({ code: 403, message: '无权限：仅医生可操作' });
     }
+    const doctor = await Doctor.findOne({ where: { userId: userId } });
+    if (!doctor) {
+        return res.status(403).json({ code: 403, message: '医生信息不存在或无权操作' });
+    }
+    const doctorId = doctor.doctorId; 
     
-    // 3. 检查是否有待就诊/已叫号的预约
-    const existingAppointments = await Appointment.findAll({
-        where: { 
-            scheduleId: parsedScheduleId, 
-            isValid: 1, 
-            status: { [Op.in]: ['pending', 'called'] } 
-        },
-        transaction 
-    });
-
-    if (existingAppointments.length > 0) {
-        // 强制取消相关预约
-        await Appointment.update({ 
-            status: 'cancelled',
-            // 实际项目中应记录请假原因
-        }, { 
+    const parsedScheduleId = parseInt(scheduleId, 10);
+    
+    const transaction = await Schedule.sequelize.transaction();
+    try {
+        // 2. 查找排班并校验权限和状态
+        const schedule = await Schedule.findOne({ 
             where: { 
-                scheduleId: parsedScheduleId, 
-                isValid: 1, 
-                status: { [Op.in]: ['pending', 'called'] } 
-            }, 
+                scheduleId: parsedScheduleId,
+                doctorId: doctorId, // 校验权限
+                audit_status: 'approved' // 只能对已批准的排班请假
+            },
             transaction 
         });
-        console.warn(`强制取消了 ${existingAppointments.length} 个预约: Schedule ID ${parsedScheduleId}`);
+
+        if (!schedule) {
+            await transaction.rollback();
+            return res.status(404).json({ code: 404, message: '未找到已批准的排班记录或无权限操作' });
+        }
+        
+        // 3. 更新状态为 'leave_requested'
+        await schedule.update({
+            // 使用 audit_status 来记录请假状态
+            audit_status: 'leave_requested',
+            // 可选：如果您的Schedule模型有字段，可以记录请假原因
+            // leave_reason: reason 
+        }, { transaction });
+
+        await transaction.commit();
+
+        return res.status(200).json({
+            code: 200,
+            message: '排班请假申请已提交，等待管理员审核。',
+            data: { 
+                scheduleId: parsedScheduleId, 
+                auditStatus: 'leave_requested',
+                reason: reason
+            }
+        });
+
+    } catch (error) {
+        await transaction.rollback();
+        console.error('requestLeaveForSchedule 接口执行错误:', error);
+        return res.status(500).json({ code: 500, message: '服务器内部错误' });
+    }
+};
+
+// 医生端：提报排班计划 (新增 - 包含最大人数校验)
+exports.proposeSchedule = async (req, res) => {
+  const transaction = await Schedule.sequelize.transaction();
+  try {
+    // maxCount 可能是 null 或未定义，需要处理
+    const { scheduleDate, timeSlot, maxCount: inputMaxCount } = req.body; 
+    const { userId, role } = req.user;
+
+    // 1. 角色校验
+    if (role !== 'doctor') {
+      return res.status(403).json({ code: 403, message: '无权限：仅医生可提报排班' });
     }
 
-    // 4. 更新排班状态：可预约数归零
-    await schedule.update({
-      availableCount: 0,
-      // 可以在Schedule模型中新增一个字段如 isCancelled: 1
+    // 2. 获取 doctorId 
+    const doctor = await Doctor.findOne({ where: { userId: userId } });
+    if (!doctor) {
+      return res.status(403).json({ code: 403, message: '医生信息不存在或未绑定账号' });
+    }
+    const doctorId = doctor.doctorId; 
+
+    // 3. 参数验证与最大人数默认值设置 (新逻辑)
+    if (!scheduleDate || !timeSlot) {
+      return res.status(400).json({ code: 400, message: '缺少排班日期或时间段参数' });
+    }
+    
+    let finalMaxCount = parseInt(inputMaxCount, 10);
+    
+    // 如果 inputMaxCount 无效 (NaN, null, 0 等)，或者小于最小值，则使用默认最小值
+    if (isNaN(finalMaxCount) || finalMaxCount < MIN_MAX_COUNT) {
+        finalMaxCount = MIN_MAX_COUNT;
+        console.warn(`排班提报的最大人数无效或低于下限，已自动设置为 ${MIN_MAX_COUNT}`);
+    }
+
+
+    // 4. 检查是否重复提报
+    const existingSchedule = await Schedule.findOne({
+      where: {
+        doctorId: doctorId,
+        scheduleDate: scheduleDate, // 假设 Schedule Model 使用驼峰命名
+        timeSlot: timeSlot
+      }
+    });
+
+    if (existingSchedule) {
+      // 检查当前状态是否为 pending/approved/rejected，如果已存在，则禁止重复提报
+      return res.status(400).json({ code: 400, message: '该时段排班已存在，请勿重复提报' });
+    }
+
+    // 5. 创建排班记录， audit_status 设为 pending
+    const newSchedule = await Schedule.create({
+      doctorId: doctorId,
+      scheduleDate: scheduleDate,
+      timeSlot: timeSlot,
+      maxCount: finalMaxCount,       // 使用最终确定的最大人数
+      availableCount: finalMaxCount,  // 可用人数等于最大人数
+      audit_status: 'pending'         // 状态设置为待审核
     }, { transaction });
 
     await transaction.commit();
 
-    return res.status(200).json({
-      code: 200,
-      message: `排班取消成功。${existingAppointments.length > 0 ? `已强制取消${existingAppointments.length}个预约。` : '无相关预约。'}`,
-      data: {
-        scheduleId: parsedScheduleId,
-        reason: reason || '无具体原因',
-      }
+    return res.status(201).json({ 
+        code: 201, 
+        message: '排班提报成功，等待管理员审核', 
+        data: { 
+            scheduleId: newSchedule.scheduleId, 
+            maxCount: finalMaxCount,
+            auditStatus: 'pending' 
+        } 
     });
 
   } catch (error) {
     await transaction.rollback();
-    console.error(`请求请假失败 (Schedule ID ${scheduleId}):`, error);
+    console.error('proposeSchedule 接口执行错误:', error);
     return res.status(500).json({ code: 500, message: '服务器内部错误' });
   }
 };

@@ -38,11 +38,13 @@ const SmsVerificationModel = {
       expiresAt: {
         type: DataTypes.DATE,
         allowNull: false,
+        field: 'expires_at',
         comment: '过期时间'
       },
       createdAt: {
         type: DataTypes.DATE,
         defaultValue: DataTypes.NOW,
+        field: 'created_at',
         comment: '创建时间'
       }
     }, {
