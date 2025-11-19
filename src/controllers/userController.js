@@ -160,7 +160,7 @@ exports.loginUser = async (req, res) => {
     // 生成JWT token
     const token = jwt.sign(
       {
-        userId: user.userId,
+        user_id: user.user_id || user.userId,
         username: user.username,
         role: user.role
       },
@@ -249,9 +249,11 @@ exports.verifyUser = async (req, res) => {
 // 发送验证码（忘记密码第一步）
 exports.sendVerificationCode = async (req, res) => {
   try {
+    console.log('收到发送验证码请求:', req.body);
     const { phone } = req.body;
     
     if (!phone) {
+      console.log('手机号为空');
       return res.status(400).json({
         code: 400,
         message: '手机号不能为空',
@@ -260,8 +262,9 @@ exports.sendVerificationCode = async (req, res) => {
     }
     
     // 验证手机号格式
-    const phoneRegex = /^1[3-9]\\d{9}$/;
+    const phoneRegex = /^1[3-9]\d{9}$/;
     if (!phoneRegex.test(phone)) {
+      console.log('手机号格式错误:', phone);
       return res.status(400).json({
         code: 400,
         message: '请输入正确的手机号码',
@@ -355,7 +358,7 @@ exports.verifyCode = async (req, res) => {
     }
     
     // 查找用户
-    const user = await User.findOne({ where: { user_id: decoded.user_id } });
+    const user = await User.findOne({ where: { user_id: decoded.user_id || decoded.userId } });
     if (!user) {
       return res.status(404).json({
         code: 404,
@@ -437,7 +440,7 @@ exports.resetPassword = async (req, res) => {
     }
     
     // 查找用户
-    const user = await User.findOne({ where: { user_id: decoded.user_id } });
+    const user = await User.findOne({ where: { user_id: decoded.user_id || decoded.userId } });
     if (!user) {
       return res.status(404).json({
         code: 404,

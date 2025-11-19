@@ -1,6 +1,7 @@
 require('dotenv').config();
 const https = require('https');
 const { SmsVerification } = require('../models');
+const { Op, sequelize } = require('../config/database');
 
 /**
  * 生成6位数字验证码
@@ -26,24 +27,21 @@ async function sendVerificationSms(phone, username, purpose = 'reset_password') 
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + 5);
     
-    // 存储验证码到数据库
-    await SmsVerification.create({
-      phone,
-      code,
-      purpose,
-      status: 'pending',
-      expiresAt
-    });
-    
-    // 更新同一手机号的旧验证码为已过期
-    await SmsVerification.update(
-      { status: 'expired' },
+    // 先将同一手机号的旧验证码标记为过期
+    await sequelize.query(
+      "UPDATE tb_sms_verification SET status = 'expired' WHERE phone = ? AND status = 'pending'",
       {
-        where: {
-          phone,
-          status: 'pending',
-          id: { [Op.ne]: sequelize.literal('LAST_INSERT_ID()') }
-        }
+        replacements: [phone],
+        type: sequelize.QueryTypes.UPDATE
+      }
+    );
+    
+    // 存储验证码到数据库
+    await sequelize.query(
+      "INSERT INTO tb_sms_verification (phone, code, purpose, status, expires_at, created_at) VALUES (?, ?, ?, 'pending', ?, NOW())",
+      {
+        replacements: [phone, code, purpose, expiresAt],
+        type: sequelize.QueryTypes.INSERT
       }
     );
     
@@ -61,14 +59,7 @@ async function sendVerificationSms(phone, username, purpose = 'reset_password') 
         }
       case 'mock':
         // 模拟短信发送（开发阶段使用）
-        console.log(`===== 模拟短信发送 =====`);
-        console.log(`收件人: ${phone}`);
-        console.log(`用户名: ${username}`);
-        console.log(`验证码: ${code}`);
-        console.log(`用途: ${purpose}`);
-        console.log(`过期时间: ${expiresAt}`);
-        console.log(`内容: 【医院管理系统】尊敬的${username}，您的验证码是${code}，有效期5分钟，请勿泄露给他人。`);
-        console.log(`===== 短信模拟发送完成 =====`);
+        
         return { success: true, code };
       default:
         console.error('不支持的短信服务提供商');
@@ -89,34 +80,33 @@ async function sendVerificationSms(phone, username, purpose = 'reset_password') 
  */
 async function verifySmsCode(phone, code, purpose = 'reset_password') {
   try {
-    // 查找有效的验证码
-    const verification = await SmsVerification.findOne({
-      where: {
-        phone,
-        code,
-        purpose,
-        status: 'pending',
-        expiresAt: { [Op.gt]: new Date() }
+    // 使用原生SQL查找有效的验证码
+    const [verification] = await sequelize.query(
+      "SELECT * FROM tb_sms_verification WHERE phone = ? AND code = ? AND purpose = ? AND status = 'pending' AND expires_at > NOW() LIMIT 1",
+      {
+        replacements: [phone, code, purpose],
+        type: sequelize.QueryTypes.SELECT
       }
-    });
+    );
     
     if (!verification) {
       // 检查是否是过期的验证码
-      const expired = await SmsVerification.findOne({
-        where: {
-          phone,
-          code,
-          purpose,
-          status: 'pending',
-          expiresAt: { [Op.lte]: new Date() }
+      const [expired] = await sequelize.query(
+        "SELECT * FROM tb_sms_verification WHERE phone = ? AND code = ? AND purpose = ? AND status = 'pending' AND expires_at <= NOW() LIMIT 1",
+        {
+          replacements: [phone, code, purpose],
+          type: sequelize.QueryTypes.SELECT
         }
-      });
+      );
       
       if (expired) {
         // 更新过期验证码状态
-        await SmsVerification.update(
-          { status: 'expired' },
-          { where: { id: expired.id } }
+        await sequelize.query(
+          "UPDATE tb_sms_verification SET status = 'expired' WHERE id = ?",
+          {
+            replacements: [expired.id],
+            type: sequelize.QueryTypes.UPDATE
+          }
         );
         return { valid: false, error: '验证码已过期' };
       }
@@ -125,9 +115,12 @@ async function verifySmsCode(phone, code, purpose = 'reset_password') {
     }
     
     // 更新验证码状态为已使用
-    await SmsVerification.update(
-      { status: 'used' },
-      { where: { id: verification.id } }
+    await sequelize.query(
+      "UPDATE tb_sms_verification SET status = 'used' WHERE id = ?",
+      {
+        replacements: [verification.id],
+        type: sequelize.QueryTypes.UPDATE
+      }
     );
     
     return { valid: true };
@@ -150,13 +143,13 @@ async function verifySmsConfig() {
         // 验证Spug短信配置
         const spugConfig = process.env.SPUG_PUSH_URL;
         if (!spugConfig) {
-          console.log('Spug推送URL配置不完整，请检查环境变量');
+          
           return false;
         }
-        console.log('Spug短信配置验证成功');
+        
         return true;
       case 'mock':
-        console.log('短信服务使用模拟模式');
+        
         return true;
       default:
         console.error('不支持的短信服务提供商');
@@ -188,10 +181,7 @@ async function sendSpugSms(phone, username, code) {
     // 构建Spug推送URL（使用code和targets作为URL参数）
     const requestUrl = `${spugPushUrl}?code=${code}&targets=${phone}`;
     
-    console.log(`===== Spug短信推送 =====`);
-    console.log(`推送URL: ${spugPushUrl}`);
-    console.log(`请求URL: ${requestUrl}`);
-    console.log(`发送内容: 验证码=${code}, 目标手机号=${phone}`);
+    
     
     // 发送HTTP请求到Spug推送助手
     return new Promise((resolve) => {
@@ -203,14 +193,14 @@ async function sendSpugSms(phone, username, code) {
         });
         
         res.on('end', () => {
-          console.log(`Spug推送响应: ${data}`);
+          
           
           try {
             const parsedData = JSON.parse(data);
             // Spug推送服务返回{"code": 200, "msg": "请求成功"}表示成功
             if (res.statusCode >= 200 && res.statusCode < 300 && 
                 (parsedData.code === 200 || parsedData.success === true)) {
-              console.log('===== Spug短信推送成功 =====');
+              
               resolve(true);
             } else {
               console.error(`Spug推送失败，状态码: ${res.statusCode}, 错误信息: ${parsedData?.msg || parsedData?.message || '未知错误'}`);
@@ -237,9 +227,6 @@ async function sendSpugSms(phone, username, code) {
     return false;
   }
 }
-
-// 导出Sequelize操作符
-const { Op, sequelize } = require('../config/database');
 
 module.exports = {
   sendVerificationSms,
