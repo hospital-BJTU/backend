@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const doctorAppointmentController = require('../controllers/doctorAppointmentController');
-const authMiddleware = require('../utils/authMiddleware');
+const { authenticateJWT } = require('../utils/authMiddleware');
 
 // 应用认证中间件
-router.use(authMiddleware);
+router.use(authenticateJWT);
 
 // 查询有排班的日期 (日历概览)
 router.get('/schedules/calendar', doctorAppointmentController.getScheduledDates);

@@ -23,6 +23,7 @@ const captchaRoutes = require('./routes/captchaRoutes');
 // 替换原有的appointmentRoutes，使用新的分离路由
 const userAppointmentRoutes = require('./routes/userAppointmentRoutes');
 const doctorAppointmentRoutes = require('./routes/doctorAppointmentRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 
 const app = express();
 
@@ -37,6 +38,7 @@ app.use('/api/captcha', captchaRoutes);
 // 注册分离后的预约路由
 app.use('/api/user', userAppointmentRoutes);     // 患者端预约路由
 app.use('/api/doctor', doctorAppointmentRoutes); // 医生端预约路由
+app.use('/api/admin', adminRoutes);             // 管理员路由
 
 app.get('/', (req, res) => {
   res.json({

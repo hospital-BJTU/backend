@@ -45,7 +45,8 @@ const AuditLogModel = {
       }
     }, {
       tableName: 'tb_audit_log',
-      timestamps: false
+      timestamps: false,
+      constraints: false
     });
 
     return AuditLog;

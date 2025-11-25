@@ -411,9 +411,9 @@ exports.getDoctorScheduleStatus = async (req, res) => {
     // 查找医生当天的所有排班
     const schedules = await Schedule.findAll({
       where: {
-        doctor_id: doctorId,
-        schedule_date: queryDate,
-        audit_status: 'approved'
+        doctorId: doctorId,
+        scheduleDate: queryDate,
+        auditStatus: 'approved'
       },
       include: [
         {
@@ -435,22 +435,22 @@ exports.getDoctorScheduleStatus = async (req, res) => {
       });
     }
     
-    // 提取所有schedule_id
-    const scheduleIds = schedules.map(schedule => schedule.schedule_id);
-    
+    // 提取所有scheduleId
+    const scheduleIds = schedules.map(schedule => schedule.scheduleId);
+
     // 批量查询所有相关的预约记录（一次查询替代多次查询）
     const allAppointments = await Appointment.findAll({
       where: {
-        schedule_id: { [Op.in]: scheduleIds },
-        is_valid: 1
+        scheduleId: { [Op.in]: scheduleIds },
+        isValid: 1
       },
-      order: [['serial_number', 'ASC']]
+      order: [['serialNumber', 'ASC']]
     });
-    
+
     // 批量查询最近的叫号日志（一次查询替代多次查询）
     const recentCallLog = await CallLog.findOne({
       where: {
-        doctor_id: doctorId
+        doctorId: doctorId
       },
       order: [['operation_time', 'DESC']],
       limit: 1
@@ -485,15 +485,15 @@ exports.getDoctorScheduleStatus = async (req, res) => {
       
       return {
         // 排班基本信息
-        schedule_id: schedule.schedule_id,
-        schedule_date: schedule.schedule_date,
-        time_slot: schedule.time_slot,
-        max_count: schedule.max_count,
+        scheduleId: schedule.scheduleId,
+        scheduleDate: schedule.scheduleDate,
+        timeSlot: schedule.timeSlot,
+        maxCount: schedule.maxCount,
         
         // 号源库存信息
-        available_count: schedule.available_count,
+        availableCount: schedule.availableCount,
         total_appointments: scheduleAppointments.length,
-        remaining_count: schedule.max_count - scheduleAppointments.length,
+        remaining_count: schedule.maxCount - scheduleAppointments.length,
         
         // 叫号状态信息
         called_count: calledCount,
@@ -507,8 +507,8 @@ exports.getDoctorScheduleStatus = async (req, res) => {
         last_called_number: lastCalledNumber,
         next_to_call: currentQueuePosition || (lastCalledNumber + 1),
         currently_called_appointment: currentlyCalled ? {
-          appointment_id: currentlyCalled.appt_id,
-          serial_number: currentlyCalled.serial_number
+          appointmentId: currentlyCalled.apptId,
+          serialNumber: currentlyCalled.serialNumber
         } : null,
         
         // 操作日志信息
@@ -517,10 +517,10 @@ exports.getDoctorScheduleStatus = async (req, res) => {
         
         // 医生信息
         doctor: {
-          doctor_id: schedule.Doctor.doctor_id,
-          doctor_name: schedule.Doctor.User.username,
-          doctor_title: schedule.Doctor.title,
-          department_name: schedule.Doctor.Department.dept_name
+          doctorId: schedule.Doctor.doctorId,
+          doctorName: schedule.Doctor.User.username,
+          doctorTitle: schedule.Doctor.title,
+          departmentName: schedule.Doctor.Department.deptName
         }
       };
     });
@@ -530,7 +530,7 @@ exports.getDoctorScheduleStatus = async (req, res) => {
       message: '查询成功',
       data: {
         date: queryDate,
-        doctor_id: doctorId,
+        doctorId: doctorId,
         schedules: schedulesWithStatus,
         total_schedules: schedulesWithStatus.length,
         // 添加整体统计信息
@@ -653,9 +653,9 @@ exports.getDoctorQueue = async (req, res) => {
     if (scheduleId) {
       scheduleWhere.schedule_id = scheduleId;
     } else if (date && timeSlot) {
-      scheduleWhere.schedule_date = date;
-      scheduleWhere.time_slot = timeSlot;
-      scheduleWhere.audit_status = 'approved';
+      scheduleWhere.scheduleDate = date;
+      scheduleWhere.timeSlot = timeSlot;
+      scheduleWhere.auditStatus = 'approved';
     } else {
       return res.status(400).json({
         code: 400,
@@ -951,7 +951,7 @@ exports.requestLeaveForSchedule = async (req, res) => {
             where: { 
                 scheduleId: parsedScheduleId,
                 doctorId: doctorId, // 校验权限
-                audit_status: 'approved' // 只能对已批准的排班请假
+                auditStatus: 'approved' // 只能对已批准的排班请假
             },
             transaction 
         });
@@ -963,8 +963,8 @@ exports.requestLeaveForSchedule = async (req, res) => {
         
         // 3. 更新状态为 'leave_requested'
         await schedule.update({
-            // 使用 audit_status 来记录请假状态
-            audit_status: 'leave_requested',
+            // 使用 auditStatus 来记录请假状态
+            auditStatus: 'leave_requested',
             // 可选：如果您的Schedule模型有字段，可以记录请假原因
             // leave_reason: reason 
         }, { transaction });
@@ -1036,14 +1036,15 @@ exports.proposeSchedule = async (req, res) => {
       return res.status(400).json({ code: 400, message: '该时段排班已存在，请勿重复提报' });
     }
 
-    // 5. 创建排班记录， audit_status 设为 pending
+    // 5. 创建排班记录， auditStatus 设为 pending
+    // 不包含scheduleId字段，让Sequelize自动处理自增
     const newSchedule = await Schedule.create({
       doctorId: doctorId,
       scheduleDate: scheduleDate,
       timeSlot: timeSlot,
       maxCount: finalMaxCount,       // 使用最终确定的最大人数
       availableCount: finalMaxCount,  // 可用人数等于最大人数
-      audit_status: 'pending'         // 状态设置为待审核
+      auditStatus: 'pending'         // 状态设置为待审核
     }, { transaction });
 
     await transaction.commit();
