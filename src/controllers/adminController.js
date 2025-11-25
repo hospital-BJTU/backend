@@ -376,5 +376,72 @@ module.exports = {
     deleteScheduleByAdmin: exports.deleteScheduleByAdmin,
     getLeaveRequests: exports.getLeaveRequests,
     approveLeaveRequest: exports.approveLeaveRequest,
-    rejectLeaveRequest: exports.rejectLeaveRequest
+    rejectLeaveRequest: exports.rejectLeaveRequest,
+    getDepartments: async (req, res) => {
+        try {
+            const { page = 1, limit = 10, keyword } = req.query;
+            const where = keyword ? { deptName: { [Op.like]: `%${keyword}%` } } : {};
+            const offset = (parseInt(page) - 1) * parseInt(limit);
+            const { rows, count } = await Department.findAndCountAll({ where, limit: parseInt(limit), offset });
+            return res.status(200).json({ code: 200, message: '查询成功', data: { list: rows, total: count, page: parseInt(page), limit: parseInt(limit) } });
+        } catch (error) {
+            return res.status(500).json({ code: 500, message: '服务器内部错误', data: null });
+        }
+    },
+    getDepartmentById: async (req, res) => {
+        try {
+            const deptId = parseInt(req.params.deptId, 10);
+            if (isNaN(deptId)) return res.status(400).json({ code: 400, message: '科室ID格式错误', data: null });
+            const dept = await Department.findByPk(deptId);
+            if (!dept) return res.status(404).json({ code: 404, message: '科室不存在', data: null });
+            return res.status(200).json({ code: 200, message: '查询成功', data: dept });
+        } catch (error) {
+            return res.status(500).json({ code: 500, message: '服务器内部错误', data: null });
+        }
+    },
+    createDepartment: async (req, res) => {
+        try {
+            const nameInput = (req.body.dept_name || req.body.deptName || '').trim();
+            if (!nameInput) return res.status(400).json({ code: 400, message: '科室名称不能为空', data: null });
+            const existing = await Department.findOne({ where: { deptName: nameInput } });
+            if (existing) return res.status(409).json({ code: 409, message: '科室名称已存在', data: null });
+            const dept = await Department.create({ deptName: nameInput });
+            return res.status(201).json({ code: 201, message: '创建成功', data: { dept_id: dept.deptId, dept_name: dept.deptName } });
+        } catch (error) {
+            if (error.name === 'SequelizeUniqueConstraintError') {
+                return res.status(409).json({ code: 409, message: '科室名称已存在', data: null });
+            }
+            return res.status(500).json({ code: 500, message: '服务器内部错误', data: null });
+        }
+    },
+    updateDepartment: async (req, res) => {
+        try {
+            const deptId = parseInt(req.params.deptId, 10);
+            if (isNaN(deptId)) return res.status(400).json({ code: 400, message: '科室ID格式错误', data: null });
+            const nameInput = (req.body.dept_name || req.body.deptName || '').trim();
+            if (!nameInput) return res.status(400).json({ code: 400, message: '科室名称不能为空', data: null });
+            const dept = await Department.findByPk(deptId);
+            if (!dept) return res.status(404).json({ code: 404, message: '科室不存在', data: null });
+            const dup = await Department.findOne({ where: { deptName: nameInput, deptId: { [Op.ne]: deptId } } });
+            if (dup) return res.status(409).json({ code: 409, message: '科室名称已存在', data: null });
+            await dept.update({ deptName: nameInput });
+            return res.status(200).json({ code: 200, message: '更新成功', data: { dept_id: dept.deptId, dept_name: dept.deptName } });
+        } catch (error) {
+            return res.status(500).json({ code: 500, message: '服务器内部错误', data: null });
+        }
+    },
+    deleteDepartment: async (req, res) => {
+        try {
+            const deptId = parseInt(req.params.deptId, 10);
+            if (isNaN(deptId)) return res.status(400).json({ code: 400, message: '科室ID格式错误', data: null });
+            const dept = await Department.findByPk(deptId);
+            if (!dept) return res.status(404).json({ code: 404, message: '科室不存在', data: null });
+            const doctorCount = await Doctor.count({ where: { deptId } });
+            if (doctorCount > 0) return res.status(409).json({ code: 409, message: '该科室下存在医生，无法删除', data: { doctorCount } });
+            await Department.destroy({ where: { deptId } });
+            return res.status(200).json({ code: 200, message: '删除成功', data: { dept_id: deptId } });
+        } catch (error) {
+            return res.status(500).json({ code: 500, message: '服务器内部错误', data: null });
+        }
+    }
 };
