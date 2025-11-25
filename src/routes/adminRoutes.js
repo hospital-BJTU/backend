@@ -4,7 +4,10 @@ const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController');
 // 假设您的认证中间件在 utils/authMiddleware.js
-const { isAdmin } = require('../utils/authMiddleware'); 
+const { authenticateJWT, isAdmin } = require('../utils/authMiddleware'); 
+
+// 应用JWT认证中间件
+router.use(authenticateJWT);
 
 // 应用管理员认证中间件到所有 Admin 路由
 // ⚠️ 确保您的 isAdmin 中间件能验证 req.user 中的角色是否为 'admin'

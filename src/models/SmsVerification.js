@@ -19,7 +19,7 @@ const SmsVerificationModel = {
         comment: '手机号码'
       },
       code: {
-        type: DataTypes.STRING(6),
+        type: DataTypes.STRING(15),
         allowNull: false,
         comment: '验证码'
       },

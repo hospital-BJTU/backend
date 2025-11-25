@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const userAppointmentController = require('../controllers/userAppointmentController');
-const authMiddleware = require('../utils/authMiddleware');
+const { authenticateJWT } = require('../utils/authMiddleware');
 
 // 获取科室列表 (新增功能：筛选第一步)
 router.get('/appointments/departments', userAppointmentController.getAllDepartments); 
@@ -13,7 +13,7 @@ router.get('/appointments/doctors', userAppointmentController.getDoctorsByDept);
 router.get('/available-schedules', userAppointmentController.getAvailableSchedules);
 
 // 应用认证中间件到后续路由
-router.use(authMiddleware);
+router.use(authenticateJWT);
 
 // 创建预约（挂号）
 router.post('/appointments', userAppointmentController.createAppointment);

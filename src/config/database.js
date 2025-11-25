@@ -30,9 +30,9 @@ const connectDB = async () => {
   try {
     await sequelize.authenticate();
     console.log('MySQL连接成功');
-    // 同步数据库模型 - 启用同步以确保表结构正确
-    await sequelize.sync(); 
-    console.log('数据库模型已同步');
+    // 修改为不自动修改表结构，避免重复创建索引导致超出MySQL的64个索引限制
+    await sequelize.sync({}); 
+    console.log('数据库连接成功，表结构已保留现状');
   } catch (error) {
     console.error('MySQL连接失败:', error);
     process.exit(1);

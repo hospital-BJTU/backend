@@ -5,6 +5,21 @@ require('dotenv').config();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 console.log('使用的JWT_SECRET:', JWT_SECRET); // 添加调试日志
 
+// 【新增】管理员权限校验中间件
+const isAdmin = (req, res, next) => {
+    // 假设 authenticateJWT 已经将用户信息（包括 role）设置到 req.user
+    if (req.user && req.user.role === 'admin') {
+        next(); // 身份是管理员，继续执行
+    } else {
+        // 403 Forbidden - 已认证但权限不足
+        return res.status(403).json({ 
+            code: 403, 
+            message: '权限不足，需要管理员身份', 
+            data: null 
+        });
+    }
+};
+
 // JWT验证中间件
 const authenticateJWT = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -85,4 +100,7 @@ const authenticateJWT = async (req, res, next) => {
   }
 };
 
-module.exports = authenticateJWT;
+module.exports = { 
+    authenticateJWT, // 现在可以被其他路由使用
+    isAdmin          // 现在可以在 adminRoutes.js 中被导入和使用
+};

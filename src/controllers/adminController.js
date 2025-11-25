@@ -12,7 +12,7 @@ exports.getPendingSchedules = async (req, res) => {
         
         // 动态构建查询条件
         const whereClause = {
-            audit_status: 'pending' // 核心筛选条件
+            auditStatus: 'pending' // 核心筛选条件
         };
         if (doctorId) whereClause.doctorId = doctorId; 
         
@@ -45,7 +45,7 @@ exports.getPendingSchedules = async (req, res) => {
             scheduleDate: schedule.scheduleDate,
             timeSlot: schedule.timeSlot,
             maxCount: schedule.maxCount,
-            auditStatus: schedule.audit_status,
+            auditStatus: schedule.auditStatus,
             doctor: {
                 doctorId: schedule.Doctor.doctorId,
                 doctorName: schedule.Doctor.User.username,
@@ -53,16 +53,17 @@ exports.getPendingSchedules = async (req, res) => {
             }
         }));
 
-        return res.status(200).json({ 
-            code: 200, 
-            message: '查询待审核排班成功', 
-            data: formattedSchedules 
+        return res.status(200).json({
+            code: 200,
+            message: '查询待审核排班成功',
+            data: formattedSchedules
         });
     } catch (error) {
         console.error('getPendingSchedules 接口执行错误:', error);
         return res.status(500).json({ code: 500, message: '服务器内部错误' });
     }
 };
+//
 
 // 管理员端：审核/拒绝排班请求 
 exports.auditSchedule = async (req, res) => {
@@ -86,12 +87,12 @@ exports.auditSchedule = async (req, res) => {
     const transaction = await Schedule.sequelize.transaction();
     try {
         // 2. 查找排班，并确保其状态为 pending
-        const schedule = await Schedule.findOne({ 
-            where: { 
-                scheduleId: parsedScheduleId, 
-                audit_status: 'pending' 
-            }, 
-            transaction 
+        const schedule = await Schedule.findOne({
+            where: {
+                scheduleId: parsedScheduleId,
+                auditStatus: 'pending'
+            },
+            transaction
         });
 
         if (!schedule) {
@@ -102,7 +103,7 @@ exports.auditSchedule = async (req, res) => {
 
         // 3. 更新审核状态
         await schedule.update({
-            audit_status: newStatus,
+            auditStatus: newStatus,
             // 可以在 Schedule 模型中增加一个 audit_reason 字段来记录拒绝理由
             // audit_reason: newStatus === 'rejected' ? reason : null,
             // audit_by: req.user.userId, // 记录操作的管理员ID (可选)
@@ -118,7 +119,7 @@ exports.auditSchedule = async (req, res) => {
         return res.status(200).json({
             code: 200,
             message: `排班审核${actionMessage}成功`,
-            data: { 
+            data: {
                 scheduleId: parsedScheduleId,
                 auditStatus: newStatus,
                 reason: newStatus === 'rejected' ? reason : null
@@ -138,7 +139,7 @@ exports.getLeaveRequests = async (req, res) => {
         const { doctorId, deptId, page = 1, limit = 10 } = req.query;
         
         const whereClause = {
-            audit_status: 'leave_requested' // 核心筛选条件：请假申请中
+            auditStatus: 'leave_requested' // 核心筛选条件：请假申请中
         };
         if (doctorId) whereClause.doctorId = doctorId; 
         
@@ -153,8 +154,8 @@ exports.getLeaveRequests = async (req, res) => {
                     model: Doctor,
                     where: deptId ? { deptId } : {}, 
                     include: [
-                        { model: Department, attributes: ['deptName'] }, 
-                        { model: User, attributes: ['username', 'userId'] } 
+                        { model: Department, attributes: ['deptName'] },
+                        { model: User, attributes: ['username', 'userId'] }
                     ]
                 }
             ],
@@ -166,7 +167,7 @@ exports.getLeaveRequests = async (req, res) => {
             scheduleDate: schedule.scheduleDate,
             timeSlot: schedule.timeSlot,
             maxCount: schedule.maxCount,
-            auditStatus: schedule.audit_status,
+            auditStatus: schedule.auditStatus,
             // leaveReason: schedule.leave_reason, // 如果模型有记录请假原因的字段
             doctor: {
                 doctorId: schedule.Doctor.doctorId,
@@ -175,10 +176,10 @@ exports.getLeaveRequests = async (req, res) => {
             }
         }));
 
-        return res.status(200).json({ 
-            code: 200, 
-            message: '查询请假申请列表成功', 
-            data: formattedRequests 
+        return res.status(200).json({
+            code: 200,
+            message: '查询请假申请列表成功',
+            data: formattedRequests
         });
     } catch (error) {
         console.error('getLeaveRequests 接口执行错误:', error);
@@ -205,7 +206,7 @@ exports.deleteScheduleByAdmin = async (req, res) => {
         }
         
         // 1. 核心状态校验：不允许删除已批准且可能被预约的排班
-        if (schedule.audit_status === 'approved') {
+        if (schedule.auditStatus === 'approved') {
             await transaction.rollback();
             return res.status(403).json({ code: 403, message: '该排班已通过审核，如需取消请走“请假审核”流程' });
         }
@@ -230,7 +231,7 @@ exports.deleteScheduleByAdmin = async (req, res) => {
     }
 };
 
-// 管理员端：批准医生请假请求 
+// 管理员端：批准医生请假请求
 exports.approveLeaveRequest = async (req, res) => {
     const { scheduleId } = req.params;
     const parsedScheduleId = parseInt(scheduleId, 10);
@@ -244,12 +245,12 @@ exports.approveLeaveRequest = async (req, res) => {
 
     try {
         // 1. 查找排班并校验状态：必须是 leave_requested
-        const schedule = await Schedule.findOne({ 
-            where: { 
-                scheduleId: parsedScheduleId, 
-                audit_status: 'leave_requested' 
-            }, 
-            transaction 
+        const schedule = await Schedule.findOne({
+            where: {
+                scheduleId: parsedScheduleId,
+                auditStatus: 'leave_requested'
+            },
+            transaction
         });
 
         if (!schedule) {
@@ -259,28 +260,28 @@ exports.approveLeaveRequest = async (req, res) => {
         
         // 2. 查找所有待就诊/已叫号的预约
         const existingAppointments = await Appointment.findAll({
-            where: { 
-                scheduleId: parsedScheduleId, 
-                isValid: 1, 
-                status: { [Op.in]: ['pending', 'called'] } 
+            where: {
+                scheduleId: parsedScheduleId,
+                isValid: 1,
+                status: { [Op.in]: ['pending', 'called'] }
             },
-            transaction 
+            transaction
         });
         
         cancelledAppointmentCount = existingAppointments.length;
 
         if (cancelledAppointmentCount > 0) {
             // 3. 强制取消相关预约
-            await Appointment.update({ 
+            await Appointment.update({
                 status: 'cancelled',
-                // 可选：cancel_reason: '管理员批准医生请假' 
-            }, { 
-                where: { 
-                    scheduleId: parsedScheduleId, 
-                    isValid: 1, 
-                    status: { [Op.in]: ['pending', 'called'] } 
-                }, 
-                transaction 
+                // 可选：cancel_reason: '管理员批准医生请假'
+            }, {
+                where: {
+                    scheduleId: parsedScheduleId,
+                    isValid: 1,
+                    status: { [Op.in]: ['pending', 'called'] }
+                },
+                transaction
             });
             console.warn(`管理员批准请假，强制取消了 ${cancelledAppointmentCount} 个预约: Schedule ID ${parsedScheduleId}`);
             // ⚠️ 实际项目中，这里需要添加通知服务 (短信/站内信)
@@ -289,7 +290,7 @@ exports.approveLeaveRequest = async (req, res) => {
         // 4. 更新排班状态：可预约数归零， audit_status 设为 'cancelled' (终结状态)
         await schedule.update({
             availableCount: 0,
-            audit_status: 'cancelled' // 终结状态，从患者查询列表中排除
+            auditStatus: 'cancelled' // 终结状态，从患者查询列表中排除
         }, { transaction });
 
         await transaction.commit();
@@ -297,7 +298,7 @@ exports.approveLeaveRequest = async (req, res) => {
         return res.status(200).json({
             code: 200,
             message: `医生请假批准成功。排班已取消，共强制取消 ${cancelledAppointmentCount} 个有效预约。`,
-            data: { 
+            data: {
                 scheduleId: parsedScheduleId,
                 newStatus: 'cancelled',
                 cancelledAppointments: cancelledAppointmentCount
@@ -311,7 +312,7 @@ exports.approveLeaveRequest = async (req, res) => {
     }
 };
 
-// 管理员端：拒绝医生请假请求 
+// 管理员端：拒绝医生请假请求
 exports.rejectLeaveRequest = async (req, res) => {
     const { scheduleId } = req.params;
     const { reason } = req.body; // 拒绝理由
@@ -328,12 +329,12 @@ exports.rejectLeaveRequest = async (req, res) => {
     const transaction = await Schedule.sequelize.transaction();
     try {
         // 1. 查找排班并校验状态：必须是 leave_requested
-        const schedule = await Schedule.findOne({ 
-            where: { 
-                scheduleId: parsedScheduleId, 
-                audit_status: 'leave_requested' 
-            }, 
-            transaction 
+        const schedule = await Schedule.findOne({
+            where: {
+                scheduleId: parsedScheduleId,
+                auditStatus: 'leave_requested'
+            },
+            transaction
         });
 
         if (!schedule) {
@@ -343,7 +344,7 @@ exports.rejectLeaveRequest = async (req, res) => {
         
         // 2. 更新排班状态：恢复为 'approved'
         await schedule.update({
-            audit_status: 'approved', // 恢复到已批准状态
+            auditStatus: 'approved', // 恢复到已批准状态
             // 可选：记录拒绝理由
             // leave_reject_reason: reason
         }, { transaction });
@@ -355,7 +356,7 @@ exports.rejectLeaveRequest = async (req, res) => {
         return res.status(200).json({
             code: 200,
             message: '医生请假请求已拒绝，排班已恢复至可预约状态',
-            data: { 
+            data: {
                 scheduleId: parsedScheduleId,
                 newStatus: 'approved',
                 rejectReason: reason
@@ -370,10 +371,10 @@ exports.rejectLeaveRequest = async (req, res) => {
 };
 
 module.exports = {
-    getPendingSchedules,
-    auditSchedule,
-    deleteScheduleByAdmin,
-    getLeaveRequests,
-    approveLeaveRequest, // 批准请假
-    rejectLeaveRequest   // 【新增】拒绝请假
+    getPendingSchedules: exports.getPendingSchedules,
+    auditSchedule: exports.auditSchedule,
+    deleteScheduleByAdmin: exports.deleteScheduleByAdmin,
+    getLeaveRequests: exports.getLeaveRequests,
+    approveLeaveRequest: exports.approveLeaveRequest,
+    rejectLeaveRequest: exports.rejectLeaveRequest
 };

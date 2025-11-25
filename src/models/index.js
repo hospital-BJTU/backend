@@ -24,45 +24,46 @@ const AntiHoardingLog = antiHoardingLogModelModule.initiate(sequelize);
 const SmsVerification = smsVerificationModelModule.initiate(sequelize);
 
 // 设置模型之间的关联关系
-// Doctor与User关联 - 使用数据库字段名
-User.hasOne(Doctor, { foreignKey: 'user_id' });
-Doctor.belongsTo(User, { foreignKey: 'user_id' });
 
-// Doctor与Department关联 - 使用数据库字段名
-Department.hasMany(Doctor, { foreignKey: 'dept_id' });
-Doctor.belongsTo(Department, { foreignKey: 'dept_id' });
+// 1. User <-> Doctor (Doctor.userId 是 NOT NULL)
+User.hasOne(Doctor, { foreignKey: 'user_id', onDelete: 'CASCADE' });
+Doctor.belongsTo(User, { foreignKey: 'user_id', onDelete: 'CASCADE' });
 
-// Doctor与Schedule关联
-Doctor.hasMany(Schedule, { foreignKey: 'doctor_id' });
-Schedule.belongsTo(Doctor, { foreignKey: 'doctor_id' });
+// 2. Department <-> Doctor (Doctor.deptId 是 NOT NULL)
+Department.hasMany(Doctor, { foreignKey: 'dept_id', onDelete: 'CASCADE' });
+Doctor.belongsTo(Department, { foreignKey: 'dept_id', onDelete: 'CASCADE' });
 
-// AntiHoardingLog与User关联
-User.hasMany(AntiHoardingLog, { foreignKey: 'user_id' });
-AntiHoardingLog.belongsTo(User, { foreignKey: 'user_id' });
+// 3. Doctor <-> Schedule (Schedule.doctorId 是 NOT NULL) 👈 解决本次报错
+Doctor.hasMany(Schedule, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
+Schedule.belongsTo(Doctor, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
 
-// CallLog与Appointment关联
-Appointment.hasMany(CallLog, { foreignKey: 'appt_id' });
-CallLog.belongsTo(Appointment, { foreignKey: 'appt_id' });
+// 4. User <-> Appointment (Appointment.userId 是 NOT NULL)
+User.hasMany(Appointment, { foreignKey: 'user_id', onDelete: 'CASCADE' });
+Appointment.belongsTo(User, { foreignKey: 'user_id', onDelete: 'CASCADE' });
 
-// CallLog与Doctor关联
-Doctor.hasMany(CallLog, { foreignKey: 'doctor_id' });
-CallLog.belongsTo(Doctor, { foreignKey: 'doctor_id' });
+// 5. Schedule <-> Appointment (Appointment.scheduleId 是 NOT NULL)
+Schedule.hasMany(Appointment, { foreignKey: 'schedule_id', onDelete: 'CASCADE' });
+Appointment.belongsTo(Schedule, { foreignKey: 'schedule_id', onDelete: 'CASCADE' });
 
-// Appointment与Schedule关联
-Schedule.hasMany(Appointment, { foreignKey: 'schedule_id' });
-Appointment.belongsTo(Schedule, { foreignKey: 'schedule_id' });
+// 6. Schedule <-> AuditLog (AuditLog.scheduleId 是 NOT NULL)
+//Schedule.hasMany(AuditLog, { foreignKey: 'schedule_id', onDelete: 'CASCADE' });
+//AuditLog.belongsTo(Schedule, { foreignKey: 'schedule_id', onDelete: 'CASCADE' });
 
-// AuditLog与Schedule关联
-Schedule.hasMany(AuditLog, { foreignKey: 'schedule_id' });
-AuditLog.belongsTo(Schedule, { foreignKey: 'schedule_id' });
+// 7. User <-> AuditLog (AuditLog.adminId 是 NOT NULL)
+//User.hasMany(AuditLog, { as: 'AdminLogs', foreignKey: 'admin_id', onDelete: 'CASCADE' });
+//AuditLog.belongsTo(User, { foreignKey: 'admin_id', onDelete: 'CASCADE' });
 
-// AuditLog与User关联（管理员）
-User.hasMany(AuditLog, { as: 'AdminLogs', foreignKey: 'admin_id' });
-AuditLog.belongsTo(User, { as: 'Admin', foreignKey: 'admin_id' });
+// 8. Appointment <-> CallLog (CallLog.apptId 是 NOT NULL)
+Appointment.hasMany(CallLog, { foreignKey: 'appt_id', onDelete: 'CASCADE' });
+CallLog.belongsTo(Appointment, { foreignKey: 'appt_id', onDelete: 'CASCADE' });
 
-// Appointment与User关联
-User.hasMany(Appointment, { foreignKey: 'user_id' });
-Appointment.belongsTo(User, { foreignKey: 'user_id' });
+// 9. Doctor <-> CallLog (CallLog.doctorId 是 NOT NULL)
+Doctor.hasMany(CallLog, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
+CallLog.belongsTo(Doctor, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
+
+// 10. User <-> AntiHoardingLog (AntiHoardingLog.userId 是 allowNull: true，使用 SET NULL 或省略)
+User.hasMany(AntiHoardingLog, { foreignKey: 'user_id', onDelete: 'SET NULL' });
+AntiHoardingLog.belongsTo(User, { foreignKey: 'user_id', onDelete: 'SET NULL' });
 
 // 导出模型，同时确保命名一致性
 module.exports = {
