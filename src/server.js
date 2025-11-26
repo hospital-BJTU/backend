@@ -19,6 +19,8 @@ const PORT = process.env.PORT;
 
 // 导入路由
 const userRoutes = require('./routes/userRoutes');
+const userAdminRoutes = require('./routes/userAdminRoutes');
+const doctorRoutes = require('./routes/doctorRoutes');
 const captchaRoutes = require('./routes/captchaRoutes');
 // 替换原有的appointmentRoutes，使用新的分离路由
 const userAppointmentRoutes = require('./routes/userAppointmentRoutes');
@@ -34,6 +36,8 @@ app.use(express.json());
 // 连接数据库在启动服务器时进行
 // 注册路由
 app.use('/api/users', userRoutes);
+app.use('/api/admin/users', userAdminRoutes);
+app.use('/api/admin/doctors', doctorRoutes);
 app.use('/api/captcha', captchaRoutes);
 // 注册分离后的预约路由
 app.use('/api/user', userAppointmentRoutes);     // 患者端预约路由

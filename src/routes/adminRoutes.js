@@ -41,5 +41,9 @@ router.put('/schedules/:scheduleId/reject-leave', adminController.rejectLeaveReq
 
 // router.get('/users', adminController.getUsers); 
 // router.post('/departments', adminController.createDepartment);
-
+router.get('/departments', adminController.getDepartments);
+router.get('/departments/:deptId', adminController.getDepartmentById);
+router.post('/departments', adminController.createDepartment);
+router.put('/departments/:deptId', adminController.updateDepartment);
+router.delete('/departments/:deptId', adminController.deleteDepartment);
 module.exports = router;
