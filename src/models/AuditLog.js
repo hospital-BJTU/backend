@@ -12,6 +12,7 @@ const AuditLogModel = {
         type: DataTypes.INTEGER,
         autoIncrement: true,
         primaryKey: true,
+        allowNull: false,
         comment: '日志ID'
       },
       scheduleId: {
