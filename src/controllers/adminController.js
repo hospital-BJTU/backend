@@ -1,6 +1,6 @@
 // controllers/adminController.js
 
-const { Appointment, Schedule, Doctor, Department, User, CallLog } = require('../models');
+const { Appointment, Schedule, Doctor, Department, User, CallLog, AuditLog } = require('../models');
 const { Op } = require('sequelize');
 
 
@@ -109,6 +109,17 @@ exports.auditSchedule = async (req, res) => {
             // audit_by: req.user.userId, // 记录操作的管理员ID (可选)
             // audit_time: new Date()
         }, { transaction });
+
+        // 4. 记录审核日志
+        await AuditLog.create({
+            scheduleId: parsedScheduleId,
+            adminId: req.user?.userId || 1, // 假设管理员ID从请求中获取，默认值为1（系统管理员）
+            auditResult: newStatus,
+            reason: newStatus === 'rejected' ? reason : null,
+            auditTime: new Date()
+        }, {
+            transaction
+        });
 
         // 4. [可选] 如果排班被拒绝，可以通知医生
 
@@ -293,6 +304,17 @@ exports.approveLeaveRequest = async (req, res) => {
             auditStatus: 'cancelled' // 终结状态，从患者查询列表中排除
         }, { transaction });
 
+        // 5. 记录请假审核日志（批准）
+        await AuditLog.create({
+            scheduleId: parsedScheduleId,
+            adminId: req.user?.userId || 1, // 假设管理员ID从请求中获取，默认值为1（系统管理员）
+            auditResult: 'approved', // 批准请假
+            reason: '医生请假申请已批准',
+            auditTime: new Date()
+        }, {
+            transaction
+        });
+
         await transaction.commit();
 
         return res.status(200).json({
@@ -348,6 +370,17 @@ exports.rejectLeaveRequest = async (req, res) => {
             // 可选：记录拒绝理由
             // leave_reject_reason: reason
         }, { transaction });
+
+        // 3. 记录请假审核日志（拒绝）
+        await AuditLog.create({
+            scheduleId: parsedScheduleId,
+            adminId: req.user?.userId || 1, // 假设管理员ID从请求中获取，默认值为1（系统管理员）
+            auditResult: 'rejected', // 拒绝请假
+            reason: reason,
+            auditTime: new Date()
+        }, {
+            transaction
+        });
 
         await transaction.commit();
         
