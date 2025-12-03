@@ -46,4 +46,11 @@ router.get('/departments/:deptId', adminController.getDepartmentById);
 router.post('/departments', adminController.createDepartment);
 router.put('/departments/:deptId', adminController.updateDepartment);
 router.delete('/departments/:deptId', adminController.deleteDepartment);
+
+// =========================================================
+// 用户管理路由
+// =========================================================
+
+// 设置用户状态（封禁/解封账号等）
+router.put('/users/:userId/status', adminController.setUserAccountStatus);
 module.exports = router;

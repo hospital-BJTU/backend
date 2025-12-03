@@ -1,4 +1,4 @@
-require('dotenv').config();
+// dotenv已在server.js中全局配置
 
 // 从环境变量获取配置
 const allowedOrigins = process.env.ALLOWED_ORIGINS

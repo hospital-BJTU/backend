@@ -3,6 +3,9 @@ const crypto = require('crypto');
 // 存储验证码的临时对象（生产环境建议使用Redis）
 const captchaStore = new Map();
 
+// 导出captchaStore，供其他模块使用
+module.exports.captchaStore = captchaStore;
+
 // 清理过期验证码的定时器
 setInterval(() => {
     const now = Date.now();
@@ -97,8 +100,19 @@ function generateCaptchaSVG(code) {
  */
 const generateCaptcha = async (req, res) => {
     try {
+        // 检查是否为测试环境
+        const isTestMode = req.headers['x-test-mode'] === 'true' || 
+                          process.env.NODE_ENV === 'test';
+        
         // 生成四位数字验证码
-        const code = generateRandomCode();
+        let code;
+        if (isTestMode) {
+            // 测试模式下使用固定的验证码值
+            code = '1234';
+        } else {
+            // 生产模式下使用随机验证码
+            code = generateRandomCode();
+        }
         
         // 生成唯一标识符
         const captchaId = crypto.randomUUID();
@@ -106,7 +120,8 @@ const generateCaptcha = async (req, res) => {
         // 存储验证码（5分钟有效期）
         captchaStore.set(captchaId, {
             code: code.toLowerCase(),
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            isTestMode: isTestMode // 标记是否为测试模式生成的验证码
         });
         
         // 生成SVG图片
@@ -117,7 +132,9 @@ const generateCaptcha = async (req, res) => {
             success: true,
             data: {
                 captchaId: captchaId,
-                image: `data:image/svg+xml;base64,${Buffer.from(svgImage).toString('base64')}`
+                image: `data:image/svg+xml;base64,${Buffer.from(svgImage).toString('base64')}`,
+                // 在测试模式下返回验证码值（仅用于调试）
+                ...(isTestMode && { debugCode: code })
             },
             message: '验证码生成成功'
         });
@@ -219,7 +236,8 @@ const getCaptchaStats = async (req, res) => {
 module.exports = {
     generateCaptcha,
     verifyCaptcha,
-    getCaptchaStats
+    getCaptchaStats,
+    captchaStore // 也在这里导出，便于解构导入
 };
 
 

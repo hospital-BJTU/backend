@@ -3,6 +3,109 @@
 const { Appointment, Schedule, Doctor, Department, User, CallLog, AuditLog } = require('../models');
 const { Op } = require('sequelize');
 
+// 管理员端：设置用户账户状态
+const setUserAccountStatus = async (req, res) => {
+    try {
+        // 参数空值检测
+        if (!req.params || !req.params.userId) {
+            return res.status(400).json({ code: 400, message: '缺少必要参数：userId' });
+        }
+        
+        // 请求体存在性检测
+        if (!req.body) {
+            return res.status(400).json({ code: 400, message: '请求体不能为空' });
+        }
+        
+        const { userId } = req.params;
+        const { status, reason } = req.body;
+        
+        // 参数验证
+        const parsedUserId = parseInt(userId, 10);
+        if (isNaN(parsedUserId)) {
+            return res.status(400).json({ code: 400, message: '用户ID格式错误' });
+        }
+        
+        // 验证状态值
+        const validStatuses = ['active', 'banned', 'temp_locked'];
+        if (!validStatuses.includes(status)) {
+            return res.status(400).json({ code: 400, message: '无效的状态值，必须是 active、banned 或 temp_locked' });
+        }
+        
+        // 当状态为banned或temp_locked时，必须提供原因
+        if (['banned', 'temp_locked'].includes(status) && !reason) {
+            return res.status(400).json({ code: 400, message: '禁用或临时锁定账户必须提供原因' });
+        }
+        
+        // 查找用户
+        const user = await User.findByPk(parsedUserId);
+        if (!user) {
+            return res.status(404).json({ code: 404, message: '用户不存在' });
+        }
+        
+        // 开始事务
+        const transaction = await User.sequelize.transaction();
+        
+        try {
+            // 更新用户状态
+            await user.update({ 
+                accountStatus: status,
+                // 可以添加更多状态相关字段，如锁定时间、解锁时间等
+                // lockTime: status === 'temp_locked' ? new Date() : null,
+                // unlockTime: status === 'temp_locked' ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null // 临时锁定24小时示例
+            }, { transaction });
+            
+            // 记录操作日志（使用智能方法，支持新旧字段）
+            await AuditLog.createSmartLog({
+                actionType: 'user_status_change',
+                targetId: parsedUserId,
+                adminId: req.user?.userId || 1, // 假设管理员ID从请求中获取
+                actionResult: status,
+                reason: reason,
+                details: JSON.stringify({
+                    oldStatus: user.accountStatus,
+                    newStatus: status
+                }),
+                actionTime: new Date()
+            }, { transaction });
+            
+            // 提交事务
+            await transaction.commit();
+            
+            let statusMessage;
+            switch(status) {
+                case 'active':
+                    statusMessage = '启用';
+                    break;
+                case 'banned':
+                    statusMessage = '禁用';
+                    break;
+                case 'temp_locked':
+                    statusMessage = '临时锁定';
+                    break;
+            }
+            
+            return res.status(200).json({
+                code: 200,
+                message: `用户账户${statusMessage}成功`,
+                data: {
+                    userId: parsedUserId,
+                    newStatus: status,
+                    reason: reason
+                }
+            });
+            
+        } catch (error) {
+            // 回滚事务
+            await transaction.rollback();
+            throw error;
+        }
+        
+    } catch (error) {
+        console.error('setUserAccountStatus 接口执行错误:', error);
+        return res.status(500).json({ code: 500, message: '服务器内部错误' });
+    }
+};
+
 
 //管理员端：查询待审核排班列表 
 exports.getPendingSchedules = async (req, res) => {
@@ -67,6 +170,16 @@ exports.getPendingSchedules = async (req, res) => {
 
 // 管理员端：审核/拒绝排班请求 
 exports.auditSchedule = async (req, res) => {
+    // 参数空值检测
+    if (!req.params || !req.params.scheduleId) {
+        return res.status(400).json({ code: 400, message: '缺少必要参数：scheduleId' });
+    }
+    
+    // 请求体存在性检测
+    if (!req.body) {
+        return res.status(400).json({ code: 400, message: '请求体不能为空' });
+    }
+    
     const { scheduleId } = req.params;
     const { newStatus, reason } = req.body; // newStatus: 'approved' 或 'rejected'
     
@@ -110,13 +223,18 @@ exports.auditSchedule = async (req, res) => {
             // audit_time: new Date()
         }, { transaction });
 
-        // 4. 记录审核日志
-        await AuditLog.create({
-            scheduleId: parsedScheduleId,
+        // 4. 记录审核日志（使用智能方法，支持新旧字段）
+        await AuditLog.createSmartLog({
+            actionType: 'schedule_audit',
+            targetId: parsedScheduleId,
             adminId: req.user?.userId || 1, // 假设管理员ID从请求中获取，默认值为1（系统管理员）
-            auditResult: newStatus,
+            actionResult: newStatus,
             reason: newStatus === 'rejected' ? reason : null,
-            auditTime: new Date()
+            details: JSON.stringify({
+                oldStatus: schedule.auditStatus,
+                newStatus: newStatus
+            }),
+            actionTime: new Date()
         }, {
             transaction
         });
@@ -200,6 +318,11 @@ exports.getLeaveRequests = async (req, res) => {
 
 // 管理员端：删除排班记录 (仅限未生效或已拒绝的排班)
 exports.deleteScheduleByAdmin = async (req, res) => {
+    // 参数空值检测
+    if (!req.params || !req.params.scheduleId) {
+        return res.status(400).json({ code: 400, message: '缺少必要参数：scheduleId' });
+    }
+    
     const { scheduleId } = req.params;
     const parsedScheduleId = parseInt(scheduleId, 10);
     
@@ -244,6 +367,11 @@ exports.deleteScheduleByAdmin = async (req, res) => {
 
 // 管理员端：批准医生请假请求
 exports.approveLeaveRequest = async (req, res) => {
+    // 参数空值检测
+    if (!req.params || !req.params.scheduleId) {
+        return res.status(400).json({ code: 400, message: '缺少必要参数：scheduleId' });
+    }
+    
     const { scheduleId } = req.params;
     const parsedScheduleId = parseInt(scheduleId, 10);
     
@@ -306,11 +434,16 @@ exports.approveLeaveRequest = async (req, res) => {
 
         // 5. 记录请假审核日志（批准）
         await AuditLog.create({
-            scheduleId: parsedScheduleId,
+            actionType: 'schedule_audit',
+            targetId: parsedScheduleId,
             adminId: req.user?.userId || 1, // 假设管理员ID从请求中获取，默认值为1（系统管理员）
-            auditResult: 'approved', // 批准请假
+            actionResult: 'approved', // 批准请假
             reason: '医生请假申请已批准',
-            auditTime: new Date()
+            details: JSON.stringify({
+                oldStatus: schedule.auditStatus,
+                newStatus: 'cancelled'
+            }),
+            actionTime: new Date()
         }, {
             transaction
         });
@@ -336,6 +469,16 @@ exports.approveLeaveRequest = async (req, res) => {
 
 // 管理员端：拒绝医生请假请求
 exports.rejectLeaveRequest = async (req, res) => {
+    // 参数空值检测
+    if (!req.params || !req.params.scheduleId) {
+        return res.status(400).json({ code: 400, message: '缺少必要参数：scheduleId' });
+    }
+    
+    // 请求体存在性检测
+    if (!req.body) {
+        return res.status(400).json({ code: 400, message: '请求体不能为空' });
+    }
+    
     const { scheduleId } = req.params;
     const { reason } = req.body; // 拒绝理由
     const parsedScheduleId = parseInt(scheduleId, 10);
@@ -373,11 +516,16 @@ exports.rejectLeaveRequest = async (req, res) => {
 
         // 3. 记录请假审核日志（拒绝）
         await AuditLog.create({
-            scheduleId: parsedScheduleId,
+            actionType: 'schedule_audit',
+            targetId: parsedScheduleId,
             adminId: req.user?.userId || 1, // 假设管理员ID从请求中获取，默认值为1（系统管理员）
-            auditResult: 'rejected', // 拒绝请假
+            actionResult: 'rejected', // 拒绝请假
             reason: reason,
-            auditTime: new Date()
+            details: JSON.stringify({
+                oldStatus: schedule.auditStatus,
+                newStatus: 'approved'
+            }),
+            actionTime: new Date()
         }, {
             transaction
         });
@@ -403,6 +551,99 @@ exports.rejectLeaveRequest = async (req, res) => {
     }
 };
 
+// 管理员端：设置用户状态（用于封禁/解封账号等操作）
+exports.setUserStatus = async (req, res) => {
+    // 参数空值检测
+    if (!req.params || !req.params.userId) {
+        return res.status(400).json({ code: 400, message: '缺少必要参数：userId', data: null });
+    }
+    
+    // 请求体存在性检测
+    if (!req.body) {
+        return res.status(400).json({ code: 400, message: '请求体不能为空', data: null });
+    }
+    
+    const { userId } = req.params;
+    const { status, reason } = req.body;
+    const parsedUserId = parseInt(userId, 10);
+    
+    // 参数校验
+    if (isNaN(parsedUserId)) {
+        return res.status(400).json({ code: 400, message: '用户ID格式错误', data: null });
+    }
+    
+    // 定义允许的状态值
+    const allowedStatuses = ['active', 'banned', 'temp_locked', 'pending'];
+    if (!status || !allowedStatuses.includes(status)) {
+        return res.status(400).json({ code: 400, message: `无效的状态值，必须是以下之一：${allowedStatuses.join(', ')}`, data: null });
+    }
+    
+    // 对于封禁操作，要求提供理由
+    if (status === 'banned' && (!reason || reason.trim() === '')) {
+        return res.status(400).json({ code: 400, message: '封禁账号必须提供理由', data: null });
+    }
+
+    const transaction = await User.sequelize.transaction();
+    try {
+        // 查找用户
+        const user = await User.findByPk(parsedUserId, { transaction });
+        if (!user) {
+            await transaction.rollback();
+            return res.status(404).json({ code: 404, message: '用户不存在', data: null });
+        }
+        
+        // 记录原状态
+        const oldStatus = user.accountStatus || 'active';
+        
+        // 更新用户状态
+        await user.update(
+            { 
+                accountStatus: status,
+                // 如果是临时锁定，可以设置锁定到期时间
+                // lockUntil: status === 'temp_locked' ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null
+            }, 
+            { transaction }
+        );
+        
+        // 记录操作日志
+        await AuditLog.create({
+            userId: parsedUserId,
+            adminId: req.user?.userId || 1, // 记录操作的管理员ID
+            auditResult: status,
+            reason: reason || `用户状态从 ${oldStatus} 变更为 ${status}`,
+            auditTime: new Date()
+        }, {
+            transaction
+        });
+        
+        await transaction.commit();
+        
+        // 生成操作描述消息
+        const statusActions = {
+            'active': '解封',
+            'banned': '永久封禁',
+            'temp_locked': '临时锁定',
+            'pending': '设为待审核'
+        };
+        
+        return res.status(200).json({
+            code: 200,
+            message: `用户账号${statusActions[status] || '状态更新'}成功`,
+            data: {
+                userId: parsedUserId,
+                oldStatus: oldStatus,
+                newStatus: status,
+                reason: reason
+            }
+        });
+
+    } catch (error) {
+        await transaction.rollback();
+        console.error('setUserStatus 接口执行错误:', error);
+        return res.status(500).json({ code: 500, message: '服务器内部错误', data: null });
+    }
+};
+
 module.exports = {
     getPendingSchedules: exports.getPendingSchedules,
     auditSchedule: exports.auditSchedule,
@@ -410,6 +651,7 @@ module.exports = {
     getLeaveRequests: exports.getLeaveRequests,
     approveLeaveRequest: exports.approveLeaveRequest,
     rejectLeaveRequest: exports.rejectLeaveRequest,
+    setUserStatus: exports.setUserStatus,
     getDepartments: async (req, res) => {
         try {
             const { page = 1, limit = 10, keyword } = req.query;
@@ -423,6 +665,11 @@ module.exports = {
     },
     getDepartmentById: async (req, res) => {
         try {
+            // 参数空值检测
+            if (!req.params || !req.params.deptId) {
+                return res.status(400).json({ code: 400, message: '缺少必要参数：deptId', data: null });
+            }
+            
             const deptId = parseInt(req.params.deptId, 10);
             if (isNaN(deptId)) return res.status(400).json({ code: 400, message: '科室ID格式错误', data: null });
             const dept = await Department.findByPk(deptId);
@@ -434,6 +681,11 @@ module.exports = {
     },
     createDepartment: async (req, res) => {
         try {
+            // 请求体存在性检测
+            if (!req.body) {
+                return res.status(400).json({ code: 400, message: '请求体不能为空', data: null });
+            }
+            
             const nameInput = (req.body.dept_name || req.body.deptName || '').trim();
             if (!nameInput) return res.status(400).json({ code: 400, message: '科室名称不能为空', data: null });
             const existing = await Department.findOne({ where: { deptName: nameInput } });
@@ -449,6 +701,16 @@ module.exports = {
     },
     updateDepartment: async (req, res) => {
         try {
+            // 参数空值检测
+            if (!req.params || !req.params.deptId) {
+                return res.status(400).json({ code: 400, message: '缺少必要参数：deptId', data: null });
+            }
+            
+            // 请求体存在性检测
+            if (!req.body) {
+                return res.status(400).json({ code: 400, message: '请求体不能为空', data: null });
+            }
+            
             const deptId = parseInt(req.params.deptId, 10);
             if (isNaN(deptId)) return res.status(400).json({ code: 400, message: '科室ID格式错误', data: null });
             const nameInput = (req.body.dept_name || req.body.deptName || '').trim();
@@ -465,6 +727,11 @@ module.exports = {
     },
     deleteDepartment: async (req, res) => {
         try {
+            // 参数空值检测
+            if (!req.params || !req.params.deptId) {
+                return res.status(400).json({ code: 400, message: '缺少必要参数：deptId', data: null });
+            }
+            
             const deptId = parseInt(req.params.deptId, 10);
             if (isNaN(deptId)) return res.status(400).json({ code: 400, message: '科室ID格式错误', data: null });
             const dept = await Department.findByPk(deptId);
@@ -476,5 +743,6 @@ module.exports = {
         } catch (error) {
             return res.status(500).json({ code: 500, message: '服务器内部错误', data: null });
         }
-    }
+    },
+    setUserAccountStatus: setUserAccountStatus
 };

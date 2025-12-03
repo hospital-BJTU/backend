@@ -23,6 +23,9 @@ const CallLog = callLogModelModule.initiate(sequelize);
 const AntiHoardingLog = antiHoardingLogModelModule.initiate(sequelize);
 const SmsVerification = smsVerificationModelModule.initiate(sequelize);
 
+// 将createSmartLog方法附加到AuditLog模型上
+AuditLog.createSmartLog = auditLogModelModule.createSmartLog;
+
 // 设置模型之间的关联关系
 
 // 1. User <-> Doctor (Doctor.userId 是 NOT NULL)

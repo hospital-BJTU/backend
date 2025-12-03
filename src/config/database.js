@@ -1,5 +1,5 @@
 const { Sequelize } = require('sequelize');
-require('dotenv').config();
+// dotenv已在server.js中全局配置
 
 // 创建Sequelize实例
 const sequelize = new Sequelize(

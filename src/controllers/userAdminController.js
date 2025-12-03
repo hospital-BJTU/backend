@@ -1,6 +1,6 @@
 const { User, Doctor } = require('../models');
 const bcrypt = require('bcrypt');
-require('dotenv').config();
+// dotenv已在server.js中全局配置
 
 // 获取所有用户
 exports.getAllUsers = async (req, res) => {

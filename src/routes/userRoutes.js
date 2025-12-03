@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userController');
 const { authenticateJWT } = require('../utils/authMiddleware'); // 导入JWT认证中间件
+const { checkBlacklist } = require('../utils/blacklistMiddleware');
 
 // 获取所有用户
 router.get('/', userController.getAllUsers);
@@ -12,8 +13,8 @@ router.post('/', userController.createUser);
 // 用户登录
 router.post('/login', userController.loginUser);
 
-// 用户身份核验（需要JWT认证）
-router.post('/verify', authenticateJWT, userController.verifyUser);
+// 用户身份核验（需要JWT认证和账户状态检查）
+router.post('/verify', authenticateJWT, checkBlacklist, userController.verifyUser);
 
 // 发送验证码（忘记密码第一步）
 router.post('/send-code', userController.sendVerificationCode);
