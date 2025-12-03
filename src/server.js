@@ -1,3 +1,8 @@
+// 在所有模块加载之前配置dotenv
+process.env.DOTENV_SILENT = '1';
+const dotenv = require('dotenv');
+dotenv.config({ debug: false, silent: true });
+
 const express = require('express');
 const corsPackage = require('cors');
 
@@ -13,6 +18,7 @@ try {
   console.log('使用cors配置');
 }
 const { connectDB } = require('./config/database');
+const { connectRedis } = require('./config/redis');
 
 // 从环境变量获取端口
 const PORT = process.env.PORT;
@@ -74,10 +80,11 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 连接数据库并启动服务器 - 最后调用
+// 连接数据库和Redis并启动服务器 - 最后调用
 const startServer = async () => {
   try {
     await connectDB();
+    await connectRedis(); // 连接Redis
     app.listen(PORT, () => {
       console.log(`服务器运行在 http://localhost:${PORT}`);
     });

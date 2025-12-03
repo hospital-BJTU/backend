@@ -1,7 +1,7 @@
 const { Doctor, User, Department } = require('../models');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-require('dotenv').config();
+// dotenv已在server.js中全局配置
 
 // JWT相关配置
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -42,6 +42,15 @@ exports.getAllDoctors = async (req, res) => {
 // 根据ID获取医生详情
 exports.getDoctorById = async (req, res) => {
   try {
+    // 参数空值检测
+    if (!req.params || !req.params.doctorId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：doctorId',
+        data: null
+      });
+    }
+    
     const { doctorId } = req.params;
 
     const doctor = await Doctor.findOne({
@@ -85,6 +94,15 @@ exports.getDoctorById = async (req, res) => {
 // 创建医生
 exports.createDoctor = async (req, res) => {
   try {
+    // 请求体存在性检测
+    if (!req.body) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
     const { 
       username, 
       password, 
@@ -199,7 +217,26 @@ exports.createDoctor = async (req, res) => {
 // 更新医生信息
 exports.updateDoctor = async (req, res) => {
   try {
+    // 参数空值检测
+    if (!req.params || !req.params.doctorId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：doctorId',
+        data: null
+      });
+    }
+    
     const { doctorId } = req.params;
+    
+    // 请求体存在性检测
+    if (!req.body) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
     const { title, deptId } = req.body;
 
     // 验证医生是否存在
@@ -270,7 +307,26 @@ exports.updateDoctor = async (req, res) => {
 // 更新医生账户信息
 exports.updateDoctorAccount = async (req, res) => {
   try {
+    // 参数空值检测
+    if (!req.params || !req.params.doctorId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：doctorId',
+        data: null
+      });
+    }
+    
     const { doctorId } = req.params;
+    
+    // 请求体存在性检测
+    if (!req.body) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
     const { username, phone } = req.body;
 
     // 验证医生是否存在
@@ -360,7 +416,26 @@ exports.updateDoctorAccount = async (req, res) => {
 // 重置医生密码
 exports.resetDoctorPassword = async (req, res) => {
   try {
+    // 参数空值检测
+    if (!req.params || !req.params.doctorId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：doctorId',
+        data: null
+      });
+    }
+    
     const { doctorId } = req.params;
+    
+    // 请求体存在性检测
+    if (!req.body) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
     const { newPassword } = req.body;
 
     // 验证医生是否存在
@@ -413,6 +488,15 @@ exports.resetDoctorPassword = async (req, res) => {
 // 删除医生
 exports.deleteDoctor = async (req, res) => {
   try {
+    // 参数空值检测
+    if (!req.params || !req.params.doctorId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：doctorId',
+        data: null
+      });
+    }
+    
     const { doctorId } = req.params;
 
     // 验证医生是否存在
@@ -462,7 +546,26 @@ exports.deleteDoctor = async (req, res) => {
 // 审核医生
 exports.auditDoctor = async (req, res) => {
   try {
+    // 参数空值检测
+    if (!req.params || !req.params.doctorId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：doctorId',
+        data: null
+      });
+    }
+    
     const { doctorId } = req.params;
+    
+    // 请求体存在性检测
+    if (!req.body) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
     const { verifyStatus } = req.body;
 
     // 验证医生是否存在
@@ -515,6 +618,15 @@ exports.auditDoctor = async (req, res) => {
 // 根据用户ID删除医生
 exports.deleteDoctorByUserId = async (req, res) => {
   try {
+    // 参数空值检测
+    if (!req.params || !req.params.userId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：userId',
+        data: null
+      });
+    }
+    
     const { userId } = req.params;
 
     // 先查找与用户ID关联的医生记录
@@ -566,6 +678,15 @@ exports.deleteDoctorByUserId = async (req, res) => {
 // 根据用户ID获取医生信息
 exports.getDoctorByUserId = async (req, res) => {
   try {
+    // 参数空值检测
+    if (!req.params || !req.params.userId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：userId',
+        data: null
+      });
+    }
+    
     const { userId } = req.params;
 
     const doctor = await Doctor.findOne({
@@ -609,7 +730,26 @@ exports.getDoctorByUserId = async (req, res) => {
 // 根据用户ID更新医生信息
 exports.updateDoctorByUserId = async (req, res) => {
   try {
+    // 参数空值检测
+    if (!req.params || !req.params.userId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：userId',
+        data: null
+      });
+    }
+    
     const { userId } = req.params;
+    
+    // 请求体存在性检测
+    if (!req.body) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
     const { title, deptId } = req.body;
 
     // 验证医生是否存在

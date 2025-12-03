@@ -2,7 +2,7 @@ const { User } = require('../models');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { sendVerificationSms, verifySmsCode } = require('../utils/smsService');
-require('dotenv').config();
+// dotenv已在server.js中全局配置
 
 // JWT相关配置
 
@@ -33,6 +33,15 @@ exports.getAllUsers = async (req, res) => {
 // 创建新用户
 exports.createUser = async (req, res) => {
   try {
+    // 请求体存在性检测
+    if (!req.body) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
     const { username, password, role, phone } = req.body;
     
     // 基本验证
@@ -109,6 +118,15 @@ exports.createUser = async (req, res) => {
 // 用户登录
 exports.loginUser = async (req, res) => {
   try {
+    // 请求体存在性检测
+    if (!req.body) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
     const { username, password } = req.body;
     
     // 基本验证
@@ -197,8 +215,26 @@ exports.loginUser = async (req, res) => {
 // 用户身份核验
 exports.verifyUser = async (req, res) => {
   try {
+    // 用户信息空值检测
+    if (!req.user) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
     // 从JWT中间件获取用户ID
     const { user_id } = req.user;
+    
+    // 确保user_id存在
+    if (!user_id) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户信息不完整',
+        data: null
+      });
+    }
      
     // 查找用户
     const user = await User.findByPk(user_id);
@@ -249,6 +285,16 @@ exports.verifyUser = async (req, res) => {
 // 发送验证码（忘记密码第一步）
 exports.sendVerificationCode = async (req, res) => {
   try {
+    // 请求体存在性检测
+    if (!req.body) {
+      console.log('请求体为空');
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
     console.log('收到发送验证码请求:', req.body);
     const { phone } = req.body;
     
@@ -324,6 +370,15 @@ exports.sendVerificationCode = async (req, res) => {
 // 验证验证码（忘记密码第二步）
 exports.verifyCode = async (req, res) => {
   try {
+    // 请求体存在性检测
+    if (!req.body) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
     const { tempToken, code } = req.body;
     
     if (!tempToken || !code) {
@@ -407,6 +462,15 @@ exports.verifyCode = async (req, res) => {
 // 重置密码（忘记密码第三步）
 exports.resetPassword = async (req, res) => {
   try {
+    // 请求体存在性检测
+    if (!req.body) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
     const { resetToken, newPassword } = req.body;
     
     // 基本验证
