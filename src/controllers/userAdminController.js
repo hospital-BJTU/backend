@@ -1,18 +1,38 @@
 const { User, Doctor } = require('../models');
 const bcrypt = require('bcrypt');
-// dotenv已在server.js中全局配置
+const { Op } = require('sequelize'); // 添加 Op 的导入
+require('dotenv').config();
 
 // 获取所有用户
 exports.getAllUsers = async (req, res) => {
   try {
-    const users = await User.findAll({
-      attributes: ['user_id', 'username', 'role', 'phone', 'verifyStatus', 'created_at']
+    const { username, role, page = 1, limit = 10 } = req.query; // 添加 role, page, limit 参数，并设置默认值
+    const where = {};
+    
+    if (username) {
+      where.username = { [Op.like]: `%${username}%` };
+    }
+
+    if (role) {
+      where.role = role;
+    }
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const { count, rows } = await User.findAndCountAll({
+      where,
+      attributes: ['userId', 'username', 'role', 'phone', 'verifyStatus', 'createdAt'], // 确保属性名与模型定义一致
+      offset,
+      limit: parseInt(limit),
     });
     
     res.status(200).json({
       code: 200,
       message: '查询成功',
-      data: users
+      data: {
+        list: rows,
+        total: count,
+      },
     });
   } catch (error) {
     console.error('获取用户列表失败:', error);
@@ -56,7 +76,6 @@ exports.getUserById = async (req, res) => {
     });
   }
 };
-
 // 创建用户
 exports.createUser = async (req, res) => {
   try {
@@ -196,8 +215,8 @@ exports.updateUser = async (req, res) => {
 
     // 验证用户是否存在
     const user = await User.findOne({
-      where: { user_id: userId },
-      attributes: ['user_id', 'username', 'role', 'phone', 'verifyStatus']
+      where: { userId: userId },
+      attributes: ['userId', 'username', 'role', 'phone', 'verifyStatus']
     });
 
     if (!user) {
@@ -246,13 +265,13 @@ exports.updateUser = async (req, res) => {
         phone: phone || user.phone,
         verifyStatus: verifyStatus || user.verifyStatus
       },
-      { where: { user_id: userId } }
+      { where: { userId: userId } }
     );
 
     // 获取更新后的用户信息
     const updatedUser = await User.findOne({
-      where: { user_id: userId },
-      attributes: ['user_id', 'username', 'role', 'phone', 'verifyStatus', 'created_at']
+      where: { userId: userId },
+      attributes: ['userId', 'username', 'role', 'phone', 'verifyStatus', 'createdAt']
     });
 
     res.status(200).json({
@@ -297,8 +316,8 @@ exports.resetUserPassword = async (req, res) => {
 
     // 验证用户是否存在
     const user = await User.findOne({
-      where: { user_id: userId },
-      attributes: ['user_id', 'username']
+      where: { userId: userId },
+      attributes: ['userId', 'username']
     });
 
     if (!user) {
@@ -324,13 +343,13 @@ exports.resetUserPassword = async (req, res) => {
     // 更新密码
     await User.update(
       { password: hashedPassword },
-      { where: { user_id: userId } }
+      { where: { userId: userId } }
     );
 
     res.status(200).json({
       code: 200,
       message: '密码重置成功',
-      data: { user_id: userId }
+      data: { userId: userId }
     });
   } catch (error) {
     console.error('重置用户密码失败:', error);

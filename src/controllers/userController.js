@@ -1,4 +1,5 @@
 const { User } = require('../models');
+const { Op } = require('sequelize');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { sendVerificationSms, verifySmsCode } = require('../utils/smsService');
@@ -13,7 +14,14 @@ const JWT_EXPIRES_IN = '24h'; // Token过期时间
 // 获取所有用户
 exports.getAllUsers = async (req, res) => {
   try {
-    const users = await User.findAll();
+    const { username } = req.query;
+    const where = {};
+    
+    if (username) {
+      where.username = { [Op.like]: `%${username}%` };
+    }
+
+    const users = await User.findAll({ where });
     res.status(200).json({
       code: 200,
       message: '查询成功',
