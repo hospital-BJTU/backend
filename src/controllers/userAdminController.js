@@ -94,14 +94,14 @@ exports.createUser = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     
     // 手动生成user_id - 获取当前最大ID值
-    const maxIdResult = await User.max('userId');
+    const maxIdResult = await User.max('user_id');
     const newUserId = maxIdResult ? maxIdResult + 1 : 1;
     
     // 使用事务确保数据一致性
     const result = await User.sequelize.transaction(async (t) => {
       // 创建用户
       const user = await User.create({
-        userId: newUserId,
+        user_id: newUserId,
         username,
         password: hashedPassword,
         role: role || 'patient',
@@ -112,16 +112,16 @@ exports.createUser = async (req, res) => {
       // 如果是医生角色，创建医生记录
       let doctor = null;
       if (role === 'doctor') {
-        const maxDoctorIdResult = await Doctor.max('doctorId', { transaction: t });
+        const maxDoctorIdResult = await Doctor.max('doctor_id', { transaction: t });
         const newDoctorId = maxDoctorIdResult ? maxDoctorIdResult + 1 : 1;
         
         // 默认分配到第一个科室
         const defaultDeptId = 1; // 假设ID为1的科室存在
         
         doctor = await Doctor.create({
-          doctorId: newDoctorId,
-          userId: user.userId,
-          deptId: defaultDeptId,
+          doctor_id: newDoctorId,
+          user_id: user.user_id,
+          dept_id: defaultDeptId,
           title: '主治医师' // 默认职称
         }, { transaction: t });
       }
@@ -135,13 +135,13 @@ exports.createUser = async (req, res) => {
         code: 201,
         message: '医生创建成功',
         data: {
-          userId: result.user.userId,
+          userId: result.user.user_id,
           username: result.user.username,
           role: result.user.role,
           phone: result.user.phone,
           verifyStatus: result.user.verifyStatus,
-          doctorId: result.doctor.doctorId,
-          deptId: result.doctor.deptId,
+          doctorId: result.doctor.doctor_id,
+          deptId: result.doctor.dept_id,
           title: result.doctor.title
         }
       });
@@ -150,7 +150,7 @@ exports.createUser = async (req, res) => {
         code: 201,
         message: '用户创建成功',
         data: {
-          userId: result.user.userId,
+          userId: result.user.user_id,
           username: result.user.username,
           role: result.user.role,
           phone: result.user.phone,
@@ -349,8 +349,8 @@ exports.deleteUser = async (req, res) => {
 
     // 验证用户是否存在
     const user = await User.findOne({
-      where: { userId: userId },
-      attributes: ['userId', 'username', 'role']
+      where: { user_id: userId },
+      attributes: ['user_id', 'username', 'role']
     });
 
     if (!user) {
@@ -369,7 +369,7 @@ exports.deleteUser = async (req, res) => {
       if (user.role === 'doctor') {
         console.log('用户是医生，正在删除医生记录...');
         const deletedDoctorCount = await Doctor.destroy({
-          where: { userId: userId },
+          where: { user_id: userId },
           transaction: t
         });
         console.log(`删除了 ${deletedDoctorCount} 条医生记录`);
@@ -378,7 +378,7 @@ exports.deleteUser = async (req, res) => {
       // 删除用户记录
       console.log('正在删除用户记录...');
       const deletedUserCount = await User.destroy({
-        where: { userId: userId },
+        where: { user_id: userId },
         transaction: t
       });
       console.log(`删除了 ${deletedUserCount} 条用户记录`);
