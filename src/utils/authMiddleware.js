@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { User } = require('../models');
-require('dotenv').config();
+// dotenv已在server.js中全局配置
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 console.log('使用的JWT_SECRET:', JWT_SECRET); // 添加调试日志
@@ -22,9 +22,15 @@ const isAdmin = (req, res, next) => {
 
 // JWT验证中间件
 const authenticateJWT = async (req, res, next) => {
+  console.log('=== JWT认证中间件开始 ===');
+  console.log('请求路径:', req.path);
+  console.log('请求方法:', req.method);
+  
   const authHeader = req.headers.authorization;
+  console.log('Authorization头:', authHeader);
   
   if (!authHeader) {
+    console.log('缺少认证令牌');
     return res.status(401).json({
       code: 401,
       message: '缺少认证令牌',
@@ -35,6 +41,7 @@ const authenticateJWT = async (req, res, next) => {
   // 检查Bearer前缀
   const parts = authHeader.split(' ');
   if (parts.length !== 2 || parts[0] !== 'Bearer') {
+    console.log('认证令牌格式错误');
     return res.status(401).json({
       code: 401,
       message: '认证令牌格式错误',
@@ -43,45 +50,70 @@ const authenticateJWT = async (req, res, next) => {
   }
   
   const token = parts[1];
+  console.log('提取的Token:', token.substring(0, 20) + '...');
   
   try {
     // 验证token
     const decoded = jwt.verify(token, JWT_SECRET);
+    console.log('JWT解码结果:', JSON.stringify(decoded));
     
     // 兼容新旧token格式，获取用户ID
     const userId = decoded.userId || decoded.user_id;
+    console.log('提取的用户ID:', userId);
     
-    // 简化验证逻辑，直接使用token中的信息（用于调试）
-    // 这里我们假设token是有效的，直接从token中获取用户信息
-    req.user = {
-      user_id: userId,
-      userId: userId, // 同时设置两种格式以保持兼容性
-      username: decoded.username || 'unknown',
-      role: decoded.role || 'patient'
-    };
-    
-    // 暂时注释掉数据库查询，以快速验证问题
-    /*
-    // 查找用户是否存在
-    const user = await User.findByPk(userId);
-    
-    if (!user) {
+    if (!userId) {
+      console.log('用户ID不存在于token中');
       return res.status(401).json({
         code: 401,
-        message: '用户不存在或令牌已失效',
+        message: '认证令牌格式错误，缺少用户ID',
         data: null
       });
     }
     
-    // 将用户信息存储在请求对象中，同时支持user_id和userId以确保兼容性
-    req.user = {
-      user_id: user.user_id,
-      userId: user.user_id, // 保留userId以兼容旧代码
+    // 查找用户是否存在
+    console.log('开始查找用户，用户ID:', userId);
+    const user = await User.findByPk(userId);
+    
+    if (!user) {
+      console.log('用户不存在，用户ID:', userId);
+      return res.status(401).json({
+        code: 401,
+        message: '用户不存在',
+        data: null
+      });
+    }
+    
+    console.log('找到用户:', JSON.stringify({
+      userId: user.userId,
       username: user.username,
-      role: user.role
+      role: user.role,
+      accountStatus: user.accountStatus
+    }));
+    console.log('用户对象的userId字段值:', user.userId);
+    
+    // 检查用户状态
+    if (user.accountStatus !== 'active') {
+      console.log('账户状态异常:', user.accountStatus);
+      return res.status(403).json({
+        code: 403,
+        message: '账户已被禁用',
+        data: null
+      });
+    }
+    
+    // 将用户信息存储在请求对象中，确保user_id字段正确设置
+    req.user = {
+      user_id: user.userId, // 使用userId属性，因为数据库模型定义的是userId
+      userId: user.userId, // 保留userId以兼容旧代码
+      username: user.username,
+      role: user.role,
+      accountStatus: user.accountStatus // 添加账户状态字段
     };
-    */
-    console.log('用户信息已设置到req.user:', req.user);
+    
+    console.log('认证成功，用户信息:', JSON.stringify(req.user));
+    console.log('req.user.user_id值:', req.user.user_id);
+    console.log('req.user.userId值:', req.user.userId);
+    console.log('=== JWT认证中间件结束 ===');
     next();
   } catch (error) {
     console.log('JWT验证错误:', error.name, error.message); // 添加详细错误日志

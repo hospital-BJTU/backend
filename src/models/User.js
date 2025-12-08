@@ -48,6 +48,14 @@ const UserModel = {
         unique: true,
         comment: '手机号码'
       },
+      // 【新增】账户状态字段
+      accountStatus: {
+        field: 'account_status',
+        type: DataTypes.ENUM('active', 'banned', 'temp_locked'),
+        allowNull: false,
+        defaultValue: 'active',
+        comment: '账户状态: active(正常), banned(永久封禁), temp_locked(暂时锁定)'
+      },
       createdAt: {
         field: 'created_at',
         type: DataTypes.DATE,

@@ -1,5 +1,7 @@
 const { Appointment, Schedule, Doctor, Department, User } = require('../models');
 const { Op } = require('sequelize');
+const AntiHoardingLogModel = require('../models/AntiHoardingLog');
+const AntiHoardingLog = AntiHoardingLogModel.getModel();
 
 // 获取状态描述的辅助函数
 function getStatusDescription(status) {
@@ -34,14 +36,59 @@ function calculateEstimatedTime(scheduleDate, timeSlot, waitingCount) {
 // 创建预约（患者端）
 exports.createAppointment = async (req, res) => {
   try {
+    // 请求体存在性检测
+    if (!req.body) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
+    // 用户信息空值检测
+    if (!req.user || !req.user.user_id) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
     const { scheduleId} = req.body;
-    const userId = req.user ? req.user.user_id : null;
+    const userId = req.user.user_id;
     
     // 参数验证
     if (!scheduleId || !userId) {
       return res.status(400).json({
         code: 400,
         message: '缺少必要参数：scheduleId 或 userId',
+        data: null
+      });
+    }
+    
+    // 检查用户短时间内的预约频率（业务层面防抢号）
+    const recentAppointments = await Appointment.count({
+      where: {
+        userId: userId,
+        appointmentTime: {
+          [Op.gt]: new Date(Date.now() - 5 * 60 * 1000) // 5分钟内的预约
+        },
+        status: ['pending', 'called']
+      }
+    });
+    
+    if (recentAppointments >= 2) {
+      // 记录可疑的抢号行为
+      await AntiHoardingLog.create({
+        userId: userId,
+        ipAddress: req.ip,
+        requestTime: new Date(),
+        logType: 'user_hoarding_attempt'
+      });
+      
+      return res.status(429).json({
+        code: 429,
+        message: '您在短时间内预约过于频繁，请稍后再试',
         data: null
       });
     }
@@ -93,6 +140,7 @@ exports.createAppointment = async (req, res) => {
       const appointment = await Appointment.create({
         userId,
         scheduleId: schedule.scheduleId,
+        scheduleDate: schedule.scheduleDate, // 从排班记录中获取就诊日期
         serialNumber,
         status: 'pending',
         isValid: 1,
@@ -251,6 +299,15 @@ exports.getAllDepartments = async (req, res) => {
 // 查询用户的预约列表（患者端）
 exports.getUserAppointments = async (req, res) => {
   try {
+    // 用户信息空值检测
+    if (!req.user || !req.user.user_id) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
     const { user_id } = req.user; // 从JWT中间件获取用户ID
     const { status, page = 1, limit = 10 } = req.query; // 添加分页参数和状态筛选
     
@@ -361,6 +418,24 @@ exports.getUserAppointments = async (req, res) => {
 // 取消预约
 exports.cancelAppointment = async (req, res) => {
   try {
+    // 用户信息空值检测
+    if (!req.user || !req.user.user_id) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
+    // 预约ID空值检测
+    if (!req.params || !req.params.apptId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：apptId',
+        data: null
+      });
+    }
+    
     const { apptId } = req.params;
     const { user_id } = req.user; // 从JWT中间件获取用户ID
     
@@ -439,6 +514,24 @@ exports.cancelAppointment = async (req, res) => {
 // 查询预约详情（患者端）
 exports.getAppointmentDetail = async (req, res) => {
   try {
+    // 用户信息空值检测
+    if (!req.user || !req.user.user_id) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
+    // 预约ID空值检测
+    if (!req.params || !req.params.apptId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：apptId',
+        data: null
+      });
+    }
+    
     const { apptId } = req.params;
     const { user_id } = req.user; // 从JWT中间件获取用户ID
     

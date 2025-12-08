@@ -50,9 +50,38 @@ async function getScheduleStatus(scheduleId) {
 // 医生端：标记接诊完成
 exports.markAppointmentCompletedByDoctor = async (req, res) => {
   try {
+    // 参数空值检测
     const { apptId } = req.params;
-    const { userId, role } = req.user;
+    if (!apptId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：apptId',
+        data: null
+      });
+    }
+    
+    // 用户信息空值检测
+    const userInfo = req.user;
+    if (!userInfo) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
+    const { userId, role } = userInfo;
+    if (!userId || !role) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户信息不完整',
+        data: null
+      });
+    }
 
+    // 同时支持从query和body中获取参数，提高兼容性
+    const { scheduleId, date, timeSlot, status } = { ...(req.query || {}), ...(req.body || {}) };
+    
     // 角色校验
     if (role !== 'doctor') {
       return res.status(403).json({
@@ -120,8 +149,7 @@ exports.markAppointmentCompletedByDoctor = async (req, res) => {
         operation: 'completed',
         operationTime: new Date()
       }, { 
-        transaction,
-        fields: ['apptId', 'doctorId', 'operation', 'operationTime'] // 明确指定要插入的字段，排除log_id
+        transaction
       });
 
       await transaction.commit();
@@ -157,8 +185,34 @@ exports.markAppointmentCompletedByDoctor = async (req, res) => {
 // 医生端：叫号
 exports.callAppointmentByDoctor = async (req, res) => {
   try {
+    // 参数空值检测
     const { apptId } = req.params;
-    const { userId, role } = req.user;
+    if (!apptId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：apptId',
+        data: null
+      });
+    }
+    
+    // 用户信息空值检测
+    const userInfo = req.user;
+    if (!userInfo) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
+    const { userId, role } = userInfo;
+    if (!userId || !role) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户信息不完整',
+        data: null
+      });
+    }
 
     // 角色校验：仅医生可操作
     if (role !== 'doctor') {
@@ -237,8 +291,7 @@ exports.callAppointmentByDoctor = async (req, res) => {
         operation: 'missed',
         operationTime: new Date()
       }, { 
-        transaction,
-        fields: ['apptId', 'doctorId', 'operation', 'operationTime'] // 明确指定要插入的字段，排除log_id
+        transaction
       });
       }
       
@@ -252,8 +305,7 @@ exports.callAppointmentByDoctor = async (req, res) => {
         operation: 'called',
         operationTime: new Date()
       }, { 
-        transaction,
-        fields: ['apptId', 'doctorId', 'operation', 'operationTime'] // 明确指定要插入的字段，排除log_id
+        transaction
       });
 
       await transaction.commit();
@@ -289,8 +341,34 @@ exports.callAppointmentByDoctor = async (req, res) => {
 // 医生端：标记过号
 exports.markAppointmentMissedByDoctor = async (req, res) => {
   try {
+    // 参数空值检测
     const { apptId } = req.params;
-    const { userId, role } = req.user;
+    if (!apptId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数：apptId',
+        data: null
+      });
+    }
+    
+    // 用户信息空值检测
+    const userInfo = req.user;
+    if (!userInfo) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
+    const { userId, role } = userInfo;
+    if (!userId || !role) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户信息不完整',
+        data: null
+      });
+    }
 
     if (role !== 'doctor') {
       return res.status(403).json({
@@ -357,8 +435,7 @@ exports.markAppointmentMissedByDoctor = async (req, res) => {
         operation: 'missed',
         operationTime: new Date()
       }, { 
-        transaction,
-        fields: ['apptId', 'doctorId', 'operation', 'operationTime'] // 明确指定要插入的字段，排除log_id
+        transaction
       });
 
       await transaction.commit();
@@ -394,6 +471,15 @@ exports.markAppointmentMissedByDoctor = async (req, res) => {
 // 获取医生当天排班信息和叫号状态
 exports.getDoctorScheduleStatus = async (req, res) => {
   try {
+    // 确保req.query存在
+    if (!req.query) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求参数异常，请检查请求格式',
+        data: null
+      });
+    }
+    
     const { doctorId, date } = req.query;
     
     // 基本验证
@@ -626,11 +712,27 @@ function getStatusDescription(status) {
 // 医生端队列查询（按排班查看当前队列）
 exports.getDoctorQueue = async (req, res) => {
   try {
-    const { scheduleId, date, timeSlot, status } = req.query;
-    const { userId, role } = req.user || {};
-
+    // 用户信息空值检测
+    const userInfo = req.user;
+    if (!userInfo) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
+    const { userId, role } = userInfo;
+    if (!userId || !role) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户信息不完整',
+        data: null
+      });
+    }
+    
     // 角色校验
-    if (!role || role !== 'doctor') {
+    if (role !== 'doctor') {
       return res.status(403).json({
         code: 403,
         message: '仅医生可查询本人的就诊队列',
@@ -639,7 +741,7 @@ exports.getDoctorQueue = async (req, res) => {
     }
 
     // 查医生档案
-    const doctor = await Doctor.findOne({ where: { user_id: userId } });
+    const doctor = await Doctor.findOne({ where: { userId: userId } });
     if (!doctor) {
       return res.status(404).json({
         code: 404,
@@ -649,9 +751,9 @@ exports.getDoctorQueue = async (req, res) => {
     }
 
     // 确定排班
-    let scheduleWhere = { doctor_id: doctor.doctor_id };
+    let scheduleWhere = { doctorId: doctor.doctorId };
     if (scheduleId) {
-      scheduleWhere.schedule_id = scheduleId;
+      scheduleWhere.scheduleId = scheduleId;
     } else if (date && timeSlot) {
       scheduleWhere.scheduleDate = date;
       scheduleWhere.timeSlot = timeSlot;
@@ -696,8 +798,8 @@ exports.getDoctorQueue = async (req, res) => {
 
     const appointments = await Appointment.findAll({
       where: {
-        schedule_id: schedule.schedule_id,
-        is_valid: 1,
+        scheduleId: schedule.scheduleId,
+        isValid: 1,
         status: statusFilter
       },
       include: [
@@ -764,6 +866,11 @@ async function getDoctorId(userId) {
 // 1. 查询有排班的日期
 exports.getScheduledDates = async (req, res) => {
   try {
+    // 确保req.query存在
+    if (!req.query) {
+      return res.status(400).json({ code: 400, message: '请求参数异常，请检查请求格式' });
+    }
+    
     // 确保正确获取doctorId查询参数
     const startMonth = req.query.startMonth;
     const endMonth = req.query.endMonth;
@@ -867,6 +974,11 @@ exports.getScheduledDates = async (req, res) => {
 // 2. 查询指定日期的排班详情
 exports.getScheduleDetailsByDate = async (req, res) => {
   try {
+    // 确保req.query存在
+    if (!req.query) {
+      return res.status(400).json({ code: 400, message: '请求参数异常，请检查请求格式' });
+    }
+    
     const { date, doctorId } = req.query; // 格式: YYYY-MM-DD
     let userDoctorId;
     
@@ -928,12 +1040,29 @@ exports.getScheduleDetailsByDate = async (req, res) => {
 
 // 医生端：发起请假请求 (修改现有逻辑)
 exports.requestLeaveForSchedule = async (req, res) => {
-    const { scheduleId } = req.params;
-    const { reason } = req.body; // 请假原因
-    const { userId, role } = req.user;
-    
-    // 1. 角色与ID校验
-    if (role !== 'doctor') {
+    try {
+        // 参数空值检测
+        const { scheduleId } = req.params;
+        if (!scheduleId) {
+            return res.status(400).json({ code: 400, message: '缺少必要参数：scheduleId' });
+        }
+        
+        // 用户信息空值检测
+        const userInfo = req.user;
+        if (!userInfo) {
+            return res.status(401).json({ code: 401, message: '用户未登录或登录状态已过期' });
+        }
+        
+        const { userId, role } = userInfo;
+        if (!userId || !role) {
+            return res.status(401).json({ code: 401, message: '用户信息不完整' });
+        }
+        
+        // 请假原因（可选，但提供更好的用户体验）
+        const { reason } = req.body || {};
+        
+        // 1. 角色与ID校验
+        if (role !== 'doctor') {
         return res.status(403).json({ code: 403, message: '无权限：仅医生可操作' });
     }
     const doctor = await Doctor.findOne({ where: { userId: userId } });
@@ -981,8 +1110,12 @@ exports.requestLeaveForSchedule = async (req, res) => {
             }
         });
 
+        } catch (error) {
+            await transaction.rollback();
+            console.error('requestLeaveForSchedule 接口执行错误:', error);
+            return res.status(500).json({ code: 500, message: '服务器内部错误' });
+        }
     } catch (error) {
-        await transaction.rollback();
         console.error('requestLeaveForSchedule 接口执行错误:', error);
         return res.status(500).json({ code: 500, message: '服务器内部错误' });
     }
@@ -990,14 +1123,30 @@ exports.requestLeaveForSchedule = async (req, res) => {
 
 // 医生端：提报排班计划 (新增 - 包含最大人数校验)
 exports.proposeSchedule = async (req, res) => {
-  const transaction = await Schedule.sequelize.transaction();
   try {
+    // 用户信息空值检测
+    const userInfo = req.user;
+    if (!userInfo) {
+      return res.status(401).json({ code: 401, message: '用户未登录或登录状态已过期' });
+    }
+    
+    const { userId, role } = userInfo;
+    if (!userId || !role) {
+      return res.status(401).json({ code: 401, message: '用户信息不完整' });
+    }
+    
+    // 确保req.body存在
+    if (!req.body) {
+      return res.status(400).json({ code: 400, message: '请求体不能为空' });
+    }
+    
     // maxCount 可能是 null 或未定义，需要处理
     const { scheduleDate, timeSlot, maxCount: inputMaxCount } = req.body; 
-    const { userId, role } = req.user;
 
-    // 1. 角色校验
-    if (role !== 'doctor') {
+    const transaction = await Schedule.sequelize.transaction();
+    try {
+      // 1. 角色校验
+      if (role !== 'doctor') {
       return res.status(403).json({ code: 403, message: '无权限：仅医生可提报排班' });
     }
 
@@ -1009,8 +1158,12 @@ exports.proposeSchedule = async (req, res) => {
     const doctorId = doctor.doctorId; 
 
     // 3. 参数验证与最大人数默认值设置 (新逻辑)
-    if (!scheduleDate || !timeSlot) {
-      return res.status(400).json({ code: 400, message: '缺少排班日期或时间段参数' });
+    // 2. 校验参数
+    if (!scheduleDate) {
+      throw new Error('排班日期不能为空');
+    }
+    if (!timeSlot) {
+      throw new Error('时段不能为空');
     }
     
     let finalMaxCount = parseInt(inputMaxCount, 10);
@@ -1059,9 +1212,16 @@ exports.proposeSchedule = async (req, res) => {
         } 
     });
 
-  } catch (error) {
-    await transaction.rollback();
-    console.error('proposeSchedule 接口执行错误:', error);
-    return res.status(500).json({ code: 500, message: '服务器内部错误' });
-  }
+      } catch (error) {
+        await transaction.rollback();
+        console.error('提报排班计划失败:', error);
+        if (error.message === '排班日期不能为空' || error.message === '时段不能为空') {
+          return res.status(400).json({ code: 400, message: error.message });
+        }
+        return res.status(500).json({ code: 500, message: '提报排班计划失败' });
+      }
+    } catch (error) {
+      console.error('proposeSchedule 接口执行错误:', error);
+      return res.status(500).json({ code: 500, message: '服务器内部错误' });
+    }
 };

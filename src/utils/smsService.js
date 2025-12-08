@@ -1,4 +1,4 @@
-require('dotenv').config();
+// dotenv已在server.js中全局配置
 const https = require('https');
 const { SmsVerification } = require('../models');
 const { Op, sequelize } = require('../config/database');
