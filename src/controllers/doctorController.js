@@ -1,7 +1,8 @@
 const { Doctor, User, Department } = require('../models');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-// dotenv已在server.js中全局配置
+const { Op } = require('sequelize'); // 添加 Op 的导入
+require('dotenv').config();
 
 // JWT相关配置
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -10,24 +11,55 @@ const JWT_EXPIRES_IN = '24h'; // Token过期时间
 // 获取所有医生
 exports.getAllDoctors = async (req, res) => {
   try {
-    const doctors = await Doctor.findAll({
+    const { username, deptId, title, verifyStatus, page = 1, limit = 10 } = req.query; // 添加 deptId, title, verifyStatus, page, limit 参数
+    
+    const doctorWhere = {};
+    const userWhere = {};
+
+    if (deptId) {
+      doctorWhere.deptId = deptId;
+    }
+
+    if (title) {
+      doctorWhere.title = { [Op.like]: `%${title}%` };
+    }
+
+    if (username) {
+      userWhere.username = { [Op.like]: `%${username}%` };
+    }
+
+    if (verifyStatus) {
+      userWhere.verifyStatus = verifyStatus;
+    }
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const { count, rows } = await Doctor.findAndCountAll({
+      where: doctorWhere,
       include: [
         {
           model: User,
-          attributes: ['user_id', 'username', 'phone', 'verifyStatus']
+          attributes: ['userId', 'username', 'phone', 'verifyStatus'], // 统一属性名为 camelCase
+          where: userWhere, // 应用用户过滤条件
+          required: Object.keys(userWhere).length > 0, // 如果有用户过滤条件，则强制内连接
         },
         {
           model: Department,
-          attributes: ['dept_id', 'dept_name']
+          attributes: ['deptId', 'deptName'], // 统一属性名为 camelCase
         }
       ],
-      attributes: ['doctor_id', 'user_id', 'dept_id', 'title']
+      attributes: ['doctorId', 'userId', 'deptId', 'title'], // 统一属性名为 camelCase
+      offset,
+      limit: parseInt(limit),
     });
 
     res.status(200).json({
       code: 200,
       message: '查询成功',
-      data: doctors
+      data: {
+        list: rows,
+        total: count,
+      },
     });
   } catch (error) {
     console.error('获取医生列表失败:', error);
@@ -91,18 +123,10 @@ exports.getDoctorById = async (req, res) => {
   }
 };
 
+
 // 创建医生
 exports.createDoctor = async (req, res) => {
   try {
-    // 请求体存在性检测
-    if (!req.body) {
-      return res.status(400).json({
-        code: 400,
-        message: '请求体不能为空',
-        data: null
-      });
-    }
-    
     const { 
       username, 
       password, 
@@ -131,7 +155,7 @@ exports.createDoctor = async (req, res) => {
     }
 
     // 检查部门是否存在
-    const department = await Department.findOne({ where: { dept_id: deptId } });
+    const department = await Department.findOne({ where: { deptId: deptId } });
     if (!department) {
       return res.status(400).json({
         code: 400,
@@ -158,11 +182,11 @@ exports.createDoctor = async (req, res) => {
       }, { transaction: t });
 
       // 创建医生记录
-      const maxDoctorIdResult = await Doctor.max('doctor_id', { transaction: t });
+      const maxDoctorIdResult = await Doctor.max('doctorId', { transaction: t });
       const newDoctorId = maxDoctorIdResult ? maxDoctorIdResult + 1 : 1;
       
       const doctor = await Doctor.create({
-        doctor_id: newDoctorId,
+        doctorId: newDoctorId,
         userId: user.userId,
         deptId: deptId,
         title
@@ -217,31 +241,12 @@ exports.createDoctor = async (req, res) => {
 // 更新医生信息
 exports.updateDoctor = async (req, res) => {
   try {
-    // 参数空值检测
-    if (!req.params || !req.params.doctorId) {
-      return res.status(400).json({
-        code: 400,
-        message: '缺少必要参数：doctorId',
-        data: null
-      });
-    }
-    
     const { doctorId } = req.params;
-    
-    // 请求体存在性检测
-    if (!req.body) {
-      return res.status(400).json({
-        code: 400,
-        message: '请求体不能为空',
-        data: null
-      });
-    }
-    
     const { title, deptId } = req.body;
 
     // 验证医生是否存在
     const doctor = await Doctor.findOne({
-      where: { doctor_id: doctorId },
+      where: { doctorId: doctorId },
       include: [{ model: User }]
     });
 
@@ -254,8 +259,8 @@ exports.updateDoctor = async (req, res) => {
     }
 
     // 如果要更改部门，验证新部门是否存在
-    if (deptId && deptId !== doctor.dept_id) {
-      const department = await Department.findOne({ where: { dept_id: deptId } });
+    if (deptId && deptId !== doctor.deptId) {
+      const department = await Department.findOne({ where: { deptId: deptId } });
       if (!department) {
         return res.status(400).json({
           code: 400,
@@ -269,22 +274,22 @@ exports.updateDoctor = async (req, res) => {
     await Doctor.update(
       { 
         title: title || doctor.title,
-        dept_id: deptId || doctor.dept_id
+        deptId: deptId || doctor.deptId
       },
-      { where: { doctor_id: doctorId } }
+      { where: { doctorId: doctorId } }
     );
 
     // 获取更新后的医生信息
     const updatedDoctor = await Doctor.findOne({
-      where: { doctor_id: doctorId },
+      where: { doctorId: doctorId },
       include: [
         {
           model: User,
-          attributes: ['user_id', 'username', 'phone', 'verifyStatus']
+          attributes: ['userId', 'username', 'phone', 'verifyStatus']
         },
         {
           model: Department,
-          attributes: ['dept_id', 'dept_name']
+          attributes: ['deptId', 'deptName']
         }
       ]
     });
@@ -307,31 +312,12 @@ exports.updateDoctor = async (req, res) => {
 // 更新医生账户信息
 exports.updateDoctorAccount = async (req, res) => {
   try {
-    // 参数空值检测
-    if (!req.params || !req.params.doctorId) {
-      return res.status(400).json({
-        code: 400,
-        message: '缺少必要参数：doctorId',
-        data: null
-      });
-    }
-    
     const { doctorId } = req.params;
-    
-    // 请求体存在性检测
-    if (!req.body) {
-      return res.status(400).json({
-        code: 400,
-        message: '请求体不能为空',
-        data: null
-      });
-    }
-    
     const { username, phone } = req.body;
 
     // 验证医生是否存在
     const doctor = await Doctor.findOne({
-      where: { doctor_id: doctorId },
+      where: { doctorId: doctorId },
       include: [{ model: User }]
     });
 
@@ -361,20 +347,20 @@ exports.updateDoctorAccount = async (req, res) => {
         username: username || doctor.User.username,
         phone: phone || doctor.User.phone
       },
-      { where: { user_id: doctor.user_id } }
+      { where: { userId: doctor.userId } }
     );
 
     // 获取更新后的信息
     const updatedDoctor = await Doctor.findOne({
-      where: { doctor_id: doctorId },
+      where: { doctorId: doctorId },
       include: [
         {
           model: User,
-          attributes: ['user_id', 'username', 'phone', 'verifyStatus']
+          attributes: ['userId', 'username', 'phone', 'verifyStatus']
         },
         {
           model: Department,
-          attributes: ['dept_id', 'dept_name']
+          attributes: ['deptId', 'deptName']
         }
       ]
     });
@@ -416,32 +402,13 @@ exports.updateDoctorAccount = async (req, res) => {
 // 重置医生密码
 exports.resetDoctorPassword = async (req, res) => {
   try {
-    // 参数空值检测
-    if (!req.params || !req.params.doctorId) {
-      return res.status(400).json({
-        code: 400,
-        message: '缺少必要参数：doctorId',
-        data: null
-      });
-    }
-    
     const { doctorId } = req.params;
-    
-    // 请求体存在性检测
-    if (!req.body) {
-      return res.status(400).json({
-        code: 400,
-        message: '请求体不能为空',
-        data: null
-      });
-    }
-    
     const { newPassword } = req.body;
 
     // 验证医生是否存在
     const doctor = await Doctor.findOne({
-      where: { doctor_id: doctorId },
-      include: [{ model: User, attributes: ['user_id'] }]
+      where: { doctorId: doctorId },
+      include: [{ model: User, attributes: ['userId'] }]
     });
 
     if (!doctor) {
@@ -467,13 +434,13 @@ exports.resetDoctorPassword = async (req, res) => {
     // 更新密码
     await User.update(
       { password: hashedPassword },
-      { where: { user_id: doctor.User.user_id } }
+      { where: { userId: doctor.User.userId } }
     );
 
     res.status(200).json({
       code: 200,
       message: '密码重置成功',
-      data: { doctor_id: doctorId }
+      data: { doctorId: doctorId }
     });
   } catch (error) {
     console.error('重置医生密码失败:', error);
@@ -488,21 +455,12 @@ exports.resetDoctorPassword = async (req, res) => {
 // 删除医生
 exports.deleteDoctor = async (req, res) => {
   try {
-    // 参数空值检测
-    if (!req.params || !req.params.doctorId) {
-      return res.status(400).json({
-        code: 400,
-        message: '缺少必要参数：doctorId',
-        data: null
-      });
-    }
-    
     const { doctorId } = req.params;
 
     // 验证医生是否存在
     const doctor = await Doctor.findOne({
-      where: { doctor_id: doctorId },
-      include: [{ model: User, attributes: ['user_id'] }]
+      where: { doctorId: doctorId },
+      include: [{ model: User, attributes: ['userId'] }]
     });
 
     if (!doctor) {
@@ -517,13 +475,13 @@ exports.deleteDoctor = async (req, res) => {
     await Doctor.sequelize.transaction(async (t) => {
       // 删除医生记录
       await Doctor.destroy({
-        where: { doctor_id: doctorId },
+        where: { doctorId: doctorId },
         transaction: t
       });
 
       // 删除关联的用户记录
       await User.destroy({
-        where: { user_id: doctor.User.user_id },
+        where: { userId: doctor.User.userId },
         transaction: t
       });
     });
@@ -531,7 +489,7 @@ exports.deleteDoctor = async (req, res) => {
     res.status(200).json({
       code: 200,
       message: '医生删除成功',
-      data: { doctor_id: doctorId }
+      data: { doctorId: doctorId }
     });
   } catch (error) {
     console.error('删除医生失败:', error);
@@ -546,32 +504,13 @@ exports.deleteDoctor = async (req, res) => {
 // 审核医生
 exports.auditDoctor = async (req, res) => {
   try {
-    // 参数空值检测
-    if (!req.params || !req.params.doctorId) {
-      return res.status(400).json({
-        code: 400,
-        message: '缺少必要参数：doctorId',
-        data: null
-      });
-    }
-    
     const { doctorId } = req.params;
-    
-    // 请求体存在性检测
-    if (!req.body) {
-      return res.status(400).json({
-        code: 400,
-        message: '请求体不能为空',
-        data: null
-      });
-    }
-    
     const { verifyStatus } = req.body;
 
     // 验证医生是否存在
     const doctor = await Doctor.findOne({
-      where: { doctor_id: doctorId },
-      include: [{ model: User, attributes: ['user_id'] }]
+      where: { doctorId: doctorId },
+      include: [{ model: User, attributes: ['userId'] }]
     });
 
     if (!doctor) {
@@ -594,14 +533,14 @@ exports.auditDoctor = async (req, res) => {
     // 更新用户验证状态
     await User.update(
       { verifyStatus },
-      { where: { user_id: doctor.User.user_id } }
+      { where: { userId: doctor.User.userId } }
     );
 
     res.status(200).json({
       code: 200,
       message: '医生审核状态更新成功',
       data: {
-        doctor_id: doctorId,
+        doctorId: doctorId,
         verifyStatus
       }
     });
@@ -618,15 +557,6 @@ exports.auditDoctor = async (req, res) => {
 // 根据用户ID删除医生
 exports.deleteDoctorByUserId = async (req, res) => {
   try {
-    // 参数空值检测
-    if (!req.params || !req.params.userId) {
-      return res.status(400).json({
-        code: 400,
-        message: '缺少必要参数：userId',
-        data: null
-      });
-    }
-    
     const { userId } = req.params;
 
     // 先查找与用户ID关联的医生记录
@@ -678,15 +608,6 @@ exports.deleteDoctorByUserId = async (req, res) => {
 // 根据用户ID获取医生信息
 exports.getDoctorByUserId = async (req, res) => {
   try {
-    // 参数空值检测
-    if (!req.params || !req.params.userId) {
-      return res.status(400).json({
-        code: 400,
-        message: '缺少必要参数：userId',
-        data: null
-      });
-    }
-    
     const { userId } = req.params;
 
     const doctor = await Doctor.findOne({
@@ -694,14 +615,14 @@ exports.getDoctorByUserId = async (req, res) => {
       include: [
         {
           model: User,
-          attributes: ['user_id', 'username', 'phone', 'verifyStatus', 'created_at']
+          attributes: ['userId', 'username', 'phone', 'verifyStatus', 'createdAt']
         },
         {
           model: Department,
-          attributes: ['dept_id', 'dept_name']
+          attributes: ['deptId', 'deptName']
         }
       ],
-      attributes: ['doctor_id', 'user_id', 'dept_id', 'title']
+      attributes: ['doctorId', 'userId', 'deptId', 'title']
     });
 
     if (!doctor) {
@@ -730,26 +651,7 @@ exports.getDoctorByUserId = async (req, res) => {
 // 根据用户ID更新医生信息
 exports.updateDoctorByUserId = async (req, res) => {
   try {
-    // 参数空值检测
-    if (!req.params || !req.params.userId) {
-      return res.status(400).json({
-        code: 400,
-        message: '缺少必要参数：userId',
-        data: null
-      });
-    }
-    
     const { userId } = req.params;
-    
-    // 请求体存在性检测
-    if (!req.body) {
-      return res.status(400).json({
-        code: 400,
-        message: '请求体不能为空',
-        data: null
-      });
-    }
-    
     const { title, deptId } = req.body;
 
     // 验证医生是否存在
@@ -767,8 +669,8 @@ exports.updateDoctorByUserId = async (req, res) => {
     }
 
     // 如果提供了新的科室ID，验证科室是否存在
-    if (deptId && deptId !== doctor.dept_id) {
-      const department = await Department.findOne({ where: { dept_id: deptId } });
+    if (deptId && deptId !== doctor.deptId) {
+      const department = await Department.findOne({ where: { deptId: deptId } });
       if (!department) {
         return res.status(400).json({
           code: 400,
@@ -782,7 +684,7 @@ exports.updateDoctorByUserId = async (req, res) => {
     await Doctor.update(
       { 
         title: title || doctor.title,
-        dept_id: deptId || doctor.dept_id
+        deptId: deptId || doctor.deptId
       },
       { where: { userId: userId } }
     );
@@ -793,11 +695,11 @@ exports.updateDoctorByUserId = async (req, res) => {
       include: [
         {
           model: User,
-          attributes: ['user_id', 'username', 'phone', 'verifyStatus']
+          attributes: ['userId', 'username', 'phone', 'verifyStatus']
         },
         {
           model: Department,
-          attributes: ['dept_id', 'dept_name']
+          attributes: ['deptId', 'deptName']
         }
       ]
     });
