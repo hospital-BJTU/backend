@@ -50,8 +50,8 @@ exports.getUserById = async (req, res) => {
     const { userId } = req.params;
 
     const user = await User.findOne({
-      where: { user_id: userId },
-      attributes: ['user_id', 'username', 'role', 'phone', 'verifyStatus', 'created_at']
+      where: { userId: userId },
+      attributes: ['userId', 'username', 'role', 'phone', 'verifyStatus', 'createdAt']
     });
 
     if (!user) {
@@ -112,7 +112,7 @@ exports.createUser = async (req, res) => {
     // 密码加密
     const hashedPassword = await bcrypt.hash(password, 10);
     
-    // 手动生成user_id - 获取当前最大ID值
+    // 手动生成userId - 获取当前最大ID值
     const maxIdResult = await User.max('userId');
     const newUserId = maxIdResult ? maxIdResult + 1 : 1;
     
@@ -368,8 +368,8 @@ exports.deleteUser = async (req, res) => {
 
     // 验证用户是否存在
     const user = await User.findOne({
-      where: { userId: userId },
-      attributes: ['userId', 'username', 'role']
+      where: { user_id: userId },
+      attributes: ['user_id', 'username', 'role']
     });
 
     if (!user) {
@@ -388,7 +388,7 @@ exports.deleteUser = async (req, res) => {
       if (user.role === 'doctor') {
         console.log('用户是医生，正在删除医生记录...');
         const deletedDoctorCount = await Doctor.destroy({
-          where: { userId: userId },
+          where: { user_id: userId },
           transaction: t
         });
         console.log(`删除了 ${deletedDoctorCount} 条医生记录`);
@@ -397,7 +397,7 @@ exports.deleteUser = async (req, res) => {
       // 删除用户记录
       console.log('正在删除用户记录...');
       const deletedUserCount = await User.destroy({
-        where: { userId: userId },
+        where: { user_id: userId },
         transaction: t
       });
       console.log(`删除了 ${deletedUserCount} 条用户记录`);

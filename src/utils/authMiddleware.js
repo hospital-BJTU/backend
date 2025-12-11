@@ -26,6 +26,9 @@ const authenticateJWT = async (req, res, next) => {
   console.log('请求路径:', req.path);
   console.log('请求方法:', req.method);
   
+  // 确保req.user始终被初始化
+  req.user = null;
+  
   const authHeader = req.headers.authorization;
   console.log('Authorization头:', authHeader);
   
@@ -58,10 +61,10 @@ const authenticateJWT = async (req, res, next) => {
     console.log('JWT解码结果:', JSON.stringify(decoded));
     
     // 兼容新旧token格式，获取用户ID
-    const userId = decoded.userId || decoded.user_id;
-    console.log('提取的用户ID:', userId);
+    const tokenUserId = decoded.userId || decoded.user_id;
+    console.log('提取的用户ID:', tokenUserId);
     
-    if (!userId) {
+    if (!tokenUserId) {
       console.log('用户ID不存在于token中');
       return res.status(401).json({
         code: 401,
@@ -70,12 +73,12 @@ const authenticateJWT = async (req, res, next) => {
       });
     }
     
-    // 查找用户是否存在
-    console.log('开始查找用户，用户ID:', userId);
-    const user = await User.findByPk(userId);
+    // 查找用户是否存在 - 使用User模型的主键字段名userId
+    console.log('开始查找用户，用户ID:', tokenUserId);
+    const user = await User.findByPk(tokenUserId);
     
     if (!user) {
-      console.log('用户不存在，用户ID:', userId);
+      console.log('用户不存在，用户ID:', tokenUserId);
       return res.status(401).json({
         code: 401,
         message: '用户不存在',

@@ -56,6 +56,14 @@ const UserModel = {
         defaultValue: 'active',
         comment: '账户状态: active(正常), banned(永久封禁), temp_locked(暂时锁定)'
       },
+      // 【新增】微信小程序openid字段
+      wxOpenId: {
+        field: 'wx_openid',
+        type: DataTypes.STRING(100),
+        allowNull: true,
+        unique: true,
+        comment: '微信小程序用户唯一标识'
+      },
       createdAt: {
         field: 'created_at',
         type: DataTypes.DATE,
