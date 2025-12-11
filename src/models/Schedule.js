@@ -17,7 +17,7 @@ const ScheduleModel = {
       doctorId: {
         field: 'doctor_id',
         type: DataTypes.INTEGER,
-        allowNull: true,
+        allowNull: false,
         comment: '关联 tb_doctor 的ID，外键'
       },
       deptId: {
