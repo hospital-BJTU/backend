@@ -9,14 +9,18 @@ const captchaController = require('../controllers/captchaController');
  */
 const verifyCaptcha = async (req, res, next) => {
   try {
+    console.log('=== 验证码验证中间件开始 ===');
+    console.log('请求体:', JSON.stringify(req.body));
+    
     // 从请求体中获取验证码信息
     const { captchaId, captchaCode } = req.body;
     
     // 参数验证
     if (!captchaId || !captchaCode) {
+      console.log('验证码参数缺失: captchaId=' + captchaId + ', captchaCode=' + captchaCode);
       return res.status(400).json({
         code: 400,
-        message: '请提供验证码',
+        message: '验证码参数缺失，请重新获取验证码',
         data: null
       });
     }
@@ -40,6 +44,7 @@ const verifyCaptcha = async (req, res, next) => {
     const storedCaptcha = captchaStore.get(captchaId);
     
     if (!storedCaptcha) {
+      console.log('验证码已过期或不存在:', captchaId);
       return res.status(400).json({
         code: 400,
         message: '验证码已过期或不存在',
@@ -50,6 +55,7 @@ const verifyCaptcha = async (req, res, next) => {
     // 检查是否过期（5分钟）
     if (Date.now() - storedCaptcha.timestamp > 5 * 60 * 1000) {
       captchaStore.delete(captchaId);
+      console.log('验证码已过期:', captchaId);
       return res.status(400).json({
         code: 400,
         message: '验证码已过期',
@@ -59,12 +65,15 @@ const verifyCaptcha = async (req, res, next) => {
     
     // 验证验证码（不区分大小写）
     if (captchaCode.toLowerCase() !== storedCaptcha.code) {
+      console.log('验证码错误: 输入=', captchaCode, '正确=', storedCaptcha.code);
       return res.status(400).json({
         code: 400,
-        message: '验证码错误',
+        message: '验证码错误，请重新输入',
         data: null
       });
     }
+    
+    console.log('验证码验证成功:', captchaId);
     
     // 验证成功后删除验证码（一次性使用）
     captchaStore.delete(captchaId);
@@ -74,9 +83,10 @@ const verifyCaptcha = async (req, res, next) => {
     
   } catch (error) {
     console.error('验证码验证中间件错误:', error);
+    console.error('错误堆栈:', error.stack);
     return res.status(500).json({
       code: 500,
-      message: '验证码验证过程中发生错误',
+      message: '验证码验证服务出错，请稍后重试',
       data: null
     });
   }

@@ -101,18 +101,16 @@ async function fixUserTable() {
     }
     
     // 检查account_status字段是否已存在
-    const [columns] = await sequelize.query(
+    const [accountStatusColumns] = await sequelize.query(
       "SHOW COLUMNS FROM tb_user WHERE Field = 'account_status';"
     );
     
-    if (columns.length > 0) {
+    if (accountStatusColumns.length > 0) {
       logInfo('account_status字段已存在于tb_user表中');
       // 检查字段类型是否正确
-      const enumValues = columns[0].Type;
+      const enumValues = accountStatusColumns[0].Type;
       if (enumValues.includes('active') && enumValues.includes('banned') && enumValues.includes('temp_locked')) {
         logInfo('account_status字段类型和枚举值已正确配置');
-        logSuccess('tb_user表无需修复！');
-        return true;
       } else {
         logInfo('account_status字段类型不正确，需要修改');
         // 修改字段类型
@@ -132,10 +130,57 @@ async function fixUserTable() {
       logSuccess('account_status字段添加成功');
     }
     
+    // 检查wx_openid字段是否已存在
+    const [wxOpenIdColumns] = await sequelize.query(
+      "SHOW COLUMNS FROM tb_user WHERE Field = 'wx_openid';"
+    );
+    
+    if (wxOpenIdColumns.length > 0) {
+      logInfo('wx_openid字段已存在于tb_user表中');
+      // 检查字段类型是否正确
+      const fieldType = wxOpenIdColumns[0].Type;
+      if (fieldType.includes('varchar(100)') && wxOpenIdColumns[0].Null === 'YES') {
+        logInfo('wx_openid字段类型和约束已正确配置');
+      } else {
+        logInfo('wx_openid字段类型或约束不正确，需要修改');
+        // 修改字段类型和约束
+        await sequelize.query(`
+          ALTER TABLE tb_user 
+          MODIFY COLUMN wx_openid VARCHAR(100) NULL COMMENT '微信小程序用户唯一标识';
+        `);
+        logSuccess('wx_openid字段类型和约束修复成功');
+      }
+      
+      // 检查唯一性约束
+      const [uniqueKeys] = await sequelize.query(
+        "SHOW INDEX FROM tb_user WHERE Column_name = 'wx_openid' AND Non_unique = 0;"
+      );
+      
+      if (uniqueKeys.length > 0) {
+        logInfo('wx_openid字段的唯一性约束已存在');
+      } else {
+        logInfo('wx_openid字段的唯一性约束不存在，需要添加');
+        await sequelize.query(`
+          ALTER TABLE tb_user 
+          ADD UNIQUE KEY uk_wx_openid (wx_openid);
+        `);
+        logSuccess('wx_openid字段的唯一性约束添加成功');
+      }
+    } else {
+      logInfo('wx_openid字段不存在，将添加到tb_user表中');
+      // 添加wx_openid字段，暂时不添加唯一键（因为表中已有太多键）
+      await sequelize.query(`
+        ALTER TABLE tb_user 
+        ADD COLUMN wx_openid VARCHAR(100) NULL COMMENT '微信小程序用户唯一标识';
+      `);
+      logSuccess('wx_openid字段添加成功（未添加唯一键，将在应用层保证唯一性）');
+    }
+    
     logSuccess('tb_user表修复完成！');
     return true;
   } catch (error) {
     logError('修复tb_user表时出错: ' + error.message);
+    logError('错误详情: ' + JSON.stringify(error, null, 2));
     return false;
   }
 }

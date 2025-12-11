@@ -91,7 +91,7 @@ exports.markAppointmentCompletedByDoctor = async (req, res) => {
       });
     }
 
-    const doctor = await Doctor.findOne({ where: { user_id: userId } });
+    const doctor = await Doctor.findOne({ where: { userId: userId } });
     if (!doctor) {
       return res.status(403).json({
         code: 403,

@@ -9,8 +9,15 @@
  */
 const checkBlacklist = async (req, res, next) => {
   try {
+    console.log('=== 黑名单检查中间件开始 ===');
+    console.log('req.user存在性检查:', !!req.user);
+    if (req.user) {
+        console.log('req.user内容:', JSON.stringify(req.user));
+    }
+    
     // 首先检查用户是否已通过身份验证（确保authenticateJWT中间件已在前面使用）
     if (!req.user) {
+      console.log('黑名单检查：用户未认证，返回401');
       return res.status(401).json({
         code: 401,
         message: '用户未认证，请先登录',

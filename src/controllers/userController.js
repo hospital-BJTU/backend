@@ -2,6 +2,7 @@ const { User } = require('../models');
 const { Op } = require('sequelize');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const axios = require('axios');
 const { sendVerificationSms, verifySmsCode } = require('../utils/smsService');
 // dotenv已在server.js中全局配置
 
@@ -77,12 +78,12 @@ exports.createUser = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     
     // 手动生成user_id - 获取当前最大ID值
-    const maxIdResult = await User.max('user_id');
+    const maxIdResult = await User.max('userId');
     const newUserId = maxIdResult ? maxIdResult + 1 : 1;
     
     // 创建用户
     const user = await User.create({
-      user_id: newUserId,
+      userId: newUserId,
       username,
       password: hashedPassword,
       role: role || 'patient',
@@ -95,7 +96,7 @@ exports.createUser = async (req, res) => {
       code: 201,
       message: '注册成功，请完成身份核验。',
       data: {
-        user_id: user.user_id,
+        userId: user.userId,
         username: user.username,
         role: user.role,
         verifyStatus: user.verifyStatus
@@ -123,7 +124,7 @@ exports.createUser = async (req, res) => {
 
 
 
-// 用户登录
+// 用户登录（支持用户名密码登录和微信登录）
 exports.loginUser = async (req, res) => {
   try {
     // 请求体存在性检测
@@ -135,9 +136,120 @@ exports.loginUser = async (req, res) => {
       });
     }
     
-    const { username, password } = req.body;
+    const { username, password, wxCode } = req.body;
     
-    // 基本验证
+    // 微信登录逻辑
+    if (wxCode) {
+      // 验证微信配置是否存在
+      if (!process.env.WECHAT_APPID || !process.env.WECHAT_APPSECRET) {
+        return res.status(500).json({
+          code: 500,
+          message: '微信登录配置未完成',
+          data: null
+        });
+      }
+
+      // 调用微信API获取openid和session_key
+      const wechatApiUrl = `https://api.weixin.qq.com/sns/jscode2session?appid=${process.env.WECHAT_APPID}&secret=${process.env.WECHAT_APPSECRET}&js_code=${wxCode}&grant_type=authorization_code`;
+      
+      try {
+        const wechatResponse = await axios.get(wechatApiUrl);
+        const { openid, session_key, errcode, errmsg } = wechatResponse.data;
+        
+        if (errcode) {
+          return res.status(401).json({
+            code: 401,
+            message: `微信登录失败: ${errmsg}`,
+            data: null
+          });
+        }
+
+        // 根据openid查找用户
+        let user = await User.findOne({ where: { wxOpenId: openid } });
+
+        if (!user) {
+          // 如果用户不存在，创建新用户
+          // 生成虚拟手机号（10000000000 - 10000999999）
+          const virtualPhone = `10000${Math.floor(Math.random() * 10000000).toString().padStart(7, '0')}`;
+          const virtualUsername = `wx_${openid.substring(0, 20)}`;
+          
+          // 手动生成userId - 获取当前最大ID值
+          const maxIdResult = await User.max('userId');
+          const newUserId = maxIdResult ? maxIdResult + 1 : 1;
+          
+          user = await User.create({
+            userId: newUserId,
+            username: virtualUsername,
+            password: await bcrypt.hash(openid.substring(0, 8), 10), // 使用openid前8位作为初始密码
+            phone: virtualPhone, // 模型中定义的是phone字段，不是phoneNumber
+            wxOpenId: openid,
+            accountStatus: 'active', // 与模型定义的ENUM值保持一致（小写）
+            role: 'patient' // 与模型定义的ENUM值保持一致（小写）
+          });
+        }
+
+        // 检查账户状态
+        if (user.accountStatus !== 'active') {
+          return res.status(403).json({
+            code: 403,
+            message: '账户已被禁用，请联系管理员',
+            data: null
+          });
+        }
+
+        console.log('微信登录用户对象信息 (用于生成Token):', JSON.stringify(user));
+
+        // 生成JWT token
+        const token = jwt.sign(
+          {
+            user_id: user.user_id || user.userId,
+            username: user.username,
+            role: user.role
+          },
+          JWT_SECRET,
+          { expiresIn: JWT_EXPIRES_IN }
+        );
+        
+        // 解析令牌信息，用于调试和客户端确认
+        const decodedToken = jwt.decode(token);
+        console.log('微信登录生成的完整令牌:', token);
+        console.log('微信登录生成的令牌信息:', {
+          decodedToken,
+          userId: user.user_id || user.userId,
+          username: user.username,
+          tokenExpiresAt: new Date(decodedToken.exp * 1000)
+        });
+
+        return res.status(200).json({
+          code: 200,
+          message: '登录成功。',
+          data: {
+            token,
+            tokenInfo: {
+              userId: user.user_id || user.userId,
+              username: user.username,
+              issuedAt: decodedToken.iat * 1000,
+              expiresAt: decodedToken.exp * 1000
+            },
+            user: {
+              user_id: user.user_id || user.userId, // 使用模型中定义的userId字段
+              username: user.username,
+              role: user.role,
+              verifyStatus: user.verifyStatus
+            }
+          }
+        });
+      } catch (wechatError) {
+        console.error('微信API调用失败:', wechatError);
+        return res.status(500).json({
+          code: 500,
+          message: '微信登录失败，请稍后重试',
+          data: null
+        });
+      }
+    }
+
+    // 用户名密码登录逻辑
     if (!username || !password) {
       return res.status(400).json({
         code: 400,
@@ -201,7 +313,7 @@ exports.loginUser = async (req, res) => {
       data: {
         token,
         user: {
-          user_id: user.user_id || user.id,
+          user_id: user.user_id || user.userId, // 使用模型中定义的userId字段
           username: user.username,
           role: user.role,
           verifyStatus: user.verifyStatus
@@ -350,7 +462,7 @@ exports.sendVerificationCode = async (req, res) => {
     // 生成临时令牌（用于验证身份）
     const tempToken = jwt.sign(
       {
-        user_id: user.user_id,
+        user_id: user.userId,
         username: user.username,
         phone: user.phone
       },
@@ -421,7 +533,7 @@ exports.verifyCode = async (req, res) => {
     }
     
     // 查找用户
-    const user = await User.findOne({ where: { user_id: decoded.user_id || decoded.userId } });
+    const user = await User.findOne({ where: { userId: decoded.user_id || decoded.userId } });
     if (!user) {
       return res.status(404).json({
         code: 404,
@@ -442,7 +554,7 @@ exports.verifyCode = async (req, res) => {
     // 生成重置密码令牌
     const resetToken = jwt.sign(
       {
-        user_id: user.user_id,
+        user_id: user.userId,
         username: user.username,
         phone: user.phone
       },
@@ -512,7 +624,7 @@ exports.resetPassword = async (req, res) => {
     }
     
     // 查找用户
-    const user = await User.findOne({ where: { user_id: decoded.user_id || decoded.userId } });
+    const user = await User.findOne({ where: { userId: decoded.user_id || decoded.userId } });
     if (!user) {
       return res.status(404).json({
         code: 404,
