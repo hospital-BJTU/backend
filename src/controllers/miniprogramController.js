@@ -189,15 +189,14 @@ exports.getAvailableSlotsByDate = async (req, res) => {
       auditStatus: 'approved'
     };
     
-    if (deptId) {
-      whereCondition['$Doctor.deptId$'] = deptId;
-    }
+    // 注意：deptId条件将在include中的where子句中处理
 
     const schedules = await Schedule.findAll({
       where: whereCondition,
       include: [
         {
           model: Doctor,
+          where: deptId ? { deptId: deptId } : {},
           include: [
             {
               model: Department,
@@ -214,7 +213,7 @@ exports.getAvailableSlotsByDate = async (req, res) => {
           ]
         }
       ],
-      order: [['Doctor.Department.deptName', 'ASC'], ['Doctor.User.username', 'ASC'], ['timeSlot', 'ASC']]
+      order: [['timeSlot', 'ASC']]
     });
 
     // 为每个排班计算可用号源
@@ -451,7 +450,7 @@ exports.getDoctorsByDate = async (req, res) => {
           ]
         }
       ],
-      order: [['Doctor.Department.deptName', 'ASC'], ['Doctor.User.username', 'ASC']]
+      order: [['scheduleDate', 'ASC'], ['timeSlot', 'ASC']]
     });
 
     // 去重，获取唯一的医生列表

@@ -40,6 +40,10 @@ Doctor.belongsTo(Department, { foreignKey: 'dept_id', onDelete: 'CASCADE' });
 Doctor.hasMany(Schedule, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
 Schedule.belongsTo(Doctor, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
 
+// 3.1. Department <-> Schedule (Schedule.deptId 是 NOT NULL)
+Department.hasMany(Schedule, { foreignKey: 'dept_id', onDelete: 'CASCADE' });
+Schedule.belongsTo(Department, { foreignKey: 'dept_id', onDelete: 'CASCADE' });
+
 // 4. User <-> Appointment (Appointment.userId 是 NOT NULL)
 User.hasMany(Appointment, { foreignKey: 'user_id', onDelete: 'CASCADE' });
 Appointment.belongsTo(User, { foreignKey: 'user_id', onDelete: 'CASCADE' });
