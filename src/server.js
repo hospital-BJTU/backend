@@ -32,6 +32,7 @@ const captchaRoutes = require('./routes/captchaRoutes');
 const userAppointmentRoutes = require('./routes/userAppointmentRoutes');
 const doctorAppointmentRoutes = require('./routes/doctorAppointmentRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const miniprogramRoutes = require('./routes/miniprogramRoutes');
 
 const app = express();
 
@@ -49,6 +50,7 @@ app.use('/api/captcha', captchaRoutes);
 app.use('/api/user', userAppointmentRoutes);     // 患者端预约路由
 app.use('/api/doctor', doctorAppointmentRoutes); // 医生端预约路由
 app.use('/api/admin', adminRoutes);             // 管理员路由
+app.use('/api/miniprogram', miniprogramRoutes); // 小程序路由
 
 app.get('/', (req, res) => {
   res.json({
