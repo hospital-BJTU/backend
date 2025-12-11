@@ -86,18 +86,18 @@ exports.getDoctorById = async (req, res) => {
     const { doctorId } = req.params;
 
     const doctor = await Doctor.findOne({
-      where: { doctor_id: doctorId },
+      where: { doctorId: doctorId },
       include: [
         {
           model: User,
-          attributes: ['user_id', 'username', 'phone', 'verifyStatus', 'created_at']
+          attributes: ['userId', 'username', 'phone', 'verifyStatus', 'createdAt']
         },
         {
           model: Department,
-          attributes: ['dept_id', 'dept_name']
+          attributes: ['deptId', 'deptName']
         }
       ],
-      attributes: ['doctor_id', 'user_id', 'dept_id', 'title']
+      attributes: ['doctorId', 'userId', 'deptId', 'title']
     });
 
     if (!doctor) {

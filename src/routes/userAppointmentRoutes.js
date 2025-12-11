@@ -15,11 +15,11 @@ router.get('/appointments/doctors', userAppointmentController.getDoctorsByDept);
 // 查询可预约的排班列表 - 不需要认证，用于前端展示可选的排班时间
 router.get('/available-schedules', userAppointmentController.getAvailableSchedules);
 
+// 创建预约（挂号）- 直接应用所有必要的中间件，确保执行顺序正确
+router.post('/appointments', authenticateJWT, checkBlacklist, appointmentLimiter, userAppointmentController.createAppointment);
+
 // 应用认证中间件和黑名单检查中间件到后续路由
 router.use(authenticateJWT, checkBlacklist);
-
-// 创建预约（挂号）- 添加限流保护和验证码验证防止抢号
-router.post('/appointments', appointmentLimiter, verifyCaptcha, userAppointmentController.createAppointment);
 
 // 查询用户的预约列表
 router.get('/appointments', userAppointmentController.getUserAppointments);

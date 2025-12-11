@@ -36,6 +36,14 @@ function calculateEstimatedTime(scheduleDate, timeSlot, waitingCount) {
 // 创建预约（患者端）
 exports.createAppointment = async (req, res) => {
   try {
+    console.log('=== 预约创建方法开始 ===');
+    console.log('请求路径:', req.path);
+    console.log('请求方法:', req.method);
+    console.log('请求体:', JSON.stringify(req.body));
+    console.log('req.user内容:', JSON.stringify(req.user));
+    console.log('req.user存在性:', !!req.user);
+    console.log('req.user.user_id存在性:', !!req.user?.user_id);
+    console.log('req.user.userId存在性:', !!req.user?.userId);
     // 请求体存在性检测
     if (!req.body) {
       return res.status(400).json({
@@ -46,13 +54,18 @@ exports.createAppointment = async (req, res) => {
     }
     
     // 用户信息空值检测
-    if (!req.user || !req.user.user_id) {
+    console.log('=== 检查用户登录状态 ===');
+    console.log('req.user:', JSON.stringify(req.user));
+    // 用户登录状态检查 - 同时检查user_id和userId属性以确保兼容性
+    if (!req.user || (!req.user.user_id && !req.user.userId)) {
+      console.log('用户未登录，req.user:', req.user);
       return res.status(401).json({
         code: 401,
         message: '用户未登录或登录状态已过期',
         data: null
       });
     }
+    console.log('用户登录状态检查通过，用户ID:', req.user.user_id);
     
     const { scheduleId} = req.body;
     const userId = req.user.user_id;
@@ -196,26 +209,19 @@ exports.createAppointment = async (req, res) => {
     
   } catch (error) {
     console.error('预约失败:', error);
+    console.error('错误堆栈:', error.stack);
     res.status(500).json({
       code: 500,
-      message: '预约过程中发生错误',
+      message: '预约失败',
       data: null
     });
   }
 };
 
-  // 新增：根据科室ID获取有排班的医生列表
+  // 新增：获取有排班的医生列表（支持按科室筛选）
   exports.getDoctorsByDept = async (req, res) => {
     try {
     const { deptId, date } = req.query; // 接收科室ID和可选日期
-
-    if (!deptId) {
-      return res.status(400).json({
-        code: 400,
-        message: '缺少必要参数：deptId',
-        data: null
-      });
-    }
 
           // 构建Schedule查询条件 (与原逻辑相同)
       const scheduleWhere = { 
@@ -226,8 +232,14 @@ exports.createAppointment = async (req, res) => {
         scheduleWhere.scheduleDate = date;
       }
 
+      // 构建Doctor查询条件
+      const doctorWhere = {};
+      if (deptId) {
+        doctorWhere.deptId = deptId;
+      }
+
       const doctors = await Doctor.findAll({
-        where: { deptId },
+        where: doctorWhere,
         include: [
           { model: User, attributes: ['username'] }, // 获取医生姓名
           { 
