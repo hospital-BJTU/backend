@@ -5,6 +5,7 @@ dotenv.config({ debug: false, silent: true });
 
 const express = require('express');
 const corsPackage = require('cors');
+const path = require('path');
 
 // 根据环境变量或默认值选择CORS配置
 const NODE_ENV = process.env.NODE_ENV || 'development';
@@ -20,6 +21,9 @@ try {
 const { connectDB } = require('./config/database');
 const { connectRedis } = require('./config/redis');
 
+// 导入预约过期检测工具
+const AppointmentExpiryChecker = require('./utils/appointmentExpiryChecker');
+
 // 从环境变量获取端口
 const PORT = process.env.PORT;
 
@@ -32,12 +36,17 @@ const captchaRoutes = require('./routes/captchaRoutes');
 const userAppointmentRoutes = require('./routes/userAppointmentRoutes');
 const doctorAppointmentRoutes = require('./routes/doctorAppointmentRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const qrcodeRoutes = require('./routes/qrcodeRoutes');
 
 const app = express();
 
 // 配置中间件
 app.use(corsPackage(corsOptions));
 app.use(express.json());
+// 配置静态文件服务，使前端可以访问public目录下的所有文件
+app.use(express.static(path.join(__dirname, 'public')));
+// 配置uploads目录的静态文件服务，使前端可以访问上传的头像
+app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 
 // 连接数据库在启动服务器时进行
 // 注册路由
@@ -49,6 +58,7 @@ app.use('/api/captcha', captchaRoutes);
 app.use('/api/user', userAppointmentRoutes);     // 患者端预约路由
 app.use('/api/doctor', doctorAppointmentRoutes); // 医生端预约路由
 app.use('/api/admin', adminRoutes);             // 管理员路由
+app.use('/api/qrcode', qrcodeRoutes);           // 二维码相关路由
 
 app.get('/', (req, res) => {
   res.json({
@@ -85,6 +95,10 @@ const startServer = async () => {
   try {
     await connectDB();
     await connectRedis(); // 连接Redis
+    
+    // 初始化预约过期检测
+    AppointmentExpiryChecker.init();
+    
     app.listen(PORT, () => {
       console.log(`服务器运行在 http://localhost:${PORT}`);
     });

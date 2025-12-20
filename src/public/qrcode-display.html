@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>二维码显示页面</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+            background-color: #ffffff;
+        }
+        .container {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background-color: #ffffff;
+        }
+        .qrcode {
+            margin: 20px 0;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .instructions {
+            text-align: left;
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f5f5f5;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+    <h1>二维码签到系统</h1>
+    
+    <div class="instructions">
+        <h3>使用说明：</h3>
+        <ol>
+            <li>点击"生成二维码"按钮获取签到二维码</li>
+            <li>使用手机扫描生成的二维码</li>
+            <li>手机会自动跳转到签到页面</li>
+            <li>在手机上输入姓名和身份证号进行签到</li>
+        </ol>
+    </div>
+
+    <!-- 基础二维码 -->
+    <div class="container">
+        <h2>签到二维码</h2>
+        <p>扫描此二维码将跳转到签到页面</p>
+        <button onclick="generateBaseQRCode()">生成二维码</button>
+        <div class="qrcode" id="baseQRCode"></div>
+    </div>
+
+    <script>
+        // 生成基础二维码
+        async function generateBaseQRCode() {
+            try {
+                const response = await fetch('/api/qrcode/generate-sign-in-qr');
+                const data = await response.json();
+                if (data.code === 200) {
+                    const qrCodeDiv = document.getElementById('baseQRCode');
+                    qrCodeDiv.innerHTML = `<img src="${data.data.qrCode}" alt="签到二维码" style="max-width: 300px; max-height: 300px;">`;
+                } else {
+                    alert('生成二维码失败：' + (data.message || '未知错误'));
+                }
+            } catch (error) {
+                console.error('生成二维码出错：', error);
+                alert('生成二维码时发生错误');
+            }
+        }
+
+        // 页面加载时自动生成基础二维码
+        window.onload = function() {
+            generateBaseQRCode();
+        };
+    </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-const { Appointment, Schedule, Doctor, Department, User } = require('../models');
+const { Appointment, Schedule, Doctor, Department, User, UserProfile } = require('../models');
 const { Op } = require('sequelize');
 const AntiHoardingLogModel = require('../models/AntiHoardingLog');
 const AntiHoardingLog = AntiHoardingLogModel.getModel();
@@ -18,7 +18,8 @@ function getStatusDescription(status) {
 // 计算预计就诊时间
 function calculateEstimatedTime(scheduleDate, timeSlot, waitingCount) {
   try {
-    const baseTime = timeSlot === 'AM' ? '09:00' : '14:00';
+    // 从具体时间段中提取开始时间（例如：从'08:00-09:00'提取'08:00'）
+    const baseTime = timeSlot.split('-')[0] || '09:00';
     const averageConsultationTime = 15; // 平均就诊时间15分钟
     const waitingTime = waitingCount * averageConsultationTime;
     
@@ -79,6 +80,16 @@ exports.createAppointment = async (req, res) => {
       });
     }
     
+    // 将scheduleId转换为数字类型
+    const numericScheduleId = parseInt(scheduleId, 10);
+    if (isNaN(numericScheduleId)) {
+      return res.status(400).json({
+        code: 400,
+        message: '无效的排班ID格式',
+        data: null
+      });
+    }
+    
     // 检查用户短时间内的预约频率（业务层面防抢号）
     const recentAppointments = await Appointment.count({
       where: {
@@ -110,7 +121,7 @@ exports.createAppointment = async (req, res) => {
     const existingAppointment = await Appointment.findOne({
       where: {
         userId: userId,
-        scheduleId: scheduleId
+        scheduleId: numericScheduleId
       }
     });
 
@@ -128,7 +139,7 @@ exports.createAppointment = async (req, res) => {
     try {
       // 查找排班信息，使用lock: true来确保并发安全
       const schedule = await Schedule.findOne({
-        where: { scheduleId, auditStatus: 'approved' },
+        where: { scheduleId: numericScheduleId, auditStatus: 'approved' },
         transaction,
         lock: true
       });
@@ -152,7 +163,7 @@ exports.createAppointment = async (req, res) => {
       // 创建预约记录，让数据库自动处理apptId主键自增
       const appointment = await Appointment.create({
         userId,
-        scheduleId: schedule.scheduleId,
+        scheduleId: numericScheduleId,
         scheduleDate: schedule.scheduleDate, // 从排班记录中获取就诊日期
         serialNumber,
         status: 'pending',
@@ -482,8 +493,8 @@ exports.cancelAppointment = async (req, res) => {
       
       // 更新预约状态为已取消
       await appointment.update({
-        status: 'cancelled',
-        isValid: 0
+        status: 'cancelled'
+        // 移除isValid: 0的设置，保留为1以便在历史记录中查询
       }, { transaction });
       
       // 恢复排班余号数（使用原子更新SQL避免并发更新丢失问题）
@@ -662,21 +673,11 @@ exports.getAvailableSchedules = async (req, res) => {
   try {
     const { deptId, date, doctorId } = req.query;
     
-    // 定义具体时间段映射
-    const timeSlotMapping = {
-      'AM': ['08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00'],
-      'PM': ['14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00']
-    };
-    
     // 构建查询条件
     const whereClause = {
       auditStatus: 'approved',
       availableCount: { [Op.gt]: 0 } // 余号数大于0
     };
-    
-    if (deptId) {
-      whereClause.deptId = deptId;
-    }
     
     if (date) {
       whereClause.scheduleDate = date;
@@ -693,9 +694,16 @@ exports.getAvailableSchedules = async (req, res) => {
         {
           model: Doctor,
           include: [
-            { model: Department },
-            { model: User, attributes: ['username'] }
-          ]
+            { 
+              model: Department 
+            },
+            { 
+              model: User, 
+              attributes: ['username'] 
+            }
+          ],
+          // 通过科室ID过滤医生
+          where: deptId ? { deptId: deptId } : {} 
         }
       ],
       order: [
@@ -704,11 +712,8 @@ exports.getAvailableSchedules = async (req, res) => {
       ]
     });
     
-    // 格式化返回数据，添加具体时间段选项
+    // 格式化返回数据
     const formattedSchedules = schedules.map(schedule => {
-      // 根据班次(AM/PM)获取对应的具体时间段列表
-      const specificTimeSlots = timeSlotMapping[schedule.timeSlot] || [];
-      
       return {
         scheduleId: schedule.scheduleId,
         doctorId: schedule.Doctor.doctorId,
@@ -717,7 +722,6 @@ exports.getAvailableSchedules = async (req, res) => {
         departmentName: schedule.Doctor.Department.deptName,
         scheduleDate: schedule.scheduleDate,
         timeSlot: schedule.timeSlot,
-        specificTimeSlots: specificTimeSlots, // 添加具体时间段选项
         availableCount: schedule.availableCount,
         maxCount: schedule.maxCount
       };
@@ -737,6 +741,121 @@ exports.getAvailableSchedules = async (req, res) => {
     res.status(500).json({
       code: 500,
       message: '查询过程中发生错误',
+      data: null
+    });
+  }
+}
+
+// 签到验证接口
+exports.verifySignIn = async (req, res) => {
+  try {
+    const { idCard, realName } = req.body;
+    
+    // 参数验证
+    if (!idCard || !realName) {
+      return res.status(400).json({
+        code: 400,
+        message: '身份证号码和姓名不能为空',
+        data: null
+      });
+    }
+    
+    // 验证身份证号码格式（18位）
+    const idCardRegex = /^[1-9]\d{5}(18|19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx]$/;
+    if (!idCardRegex.test(idCard)) {
+      return res.status(400).json({
+        code: 400,
+        message: '身份证号码格式不正确',
+        data: null
+      });
+    }
+    
+    // 验证姓名格式（只允许中文）
+    const realNameRegex = /^[\u4e00-\u9fa5]{2,6}$/;
+    if (!realNameRegex.test(realName)) {
+      return res.status(400).json({
+        code: 400,
+        message: '姓名格式不正确，只能包含2-6个中文字符',
+        data: null
+      });
+    }
+    
+    // 查找用户信息（通过身份证和姓名）
+    const userProfile = await UserProfile.findOne({
+      where: {
+        idCard: idCard,
+        realName: realName
+      },
+      include: [{
+        model: User,
+        attributes: ['userId']
+      }]
+    });
+    
+    if (!userProfile) {
+      return res.status(404).json({
+        code: 404,
+        message: '未找到匹配的用户信息',
+        data: null
+      });
+    }
+    
+    const userId = userProfile.userId;
+    
+    // 获取当前日期（YYYY-MM-DD格式）
+    const today = new Date().toISOString().split('T')[0];
+    
+    // 查找今天的未签到预约
+    const appointment = await Appointment.findOne({
+      where: {
+        userId: userId,
+        scheduleDate: today,
+        status: ['pending', 'called'], // 只处理待就诊和已叫号的预约
+        checkInStatus: 'not_checked' // 只处理未签到的预约
+      },
+      include: [{
+        model: Schedule,
+        include: [{
+          model: Doctor,
+          include: [{
+            model: User,
+            attributes: ['username']
+          }]
+        }]
+      }]
+    });
+    
+    if (!appointment) {
+      return res.status(404).json({
+        code: 404,
+        message: '未找到今天的有效预约或已完成签到',
+        data: null
+      });
+    }
+    
+    // 更新签到状态
+    await appointment.update({
+      checkInStatus: 'checked_in'
+    });
+    
+    // 返回成功响应
+    return res.status(200).json({
+      code: 200,
+      message: '签到成功',
+      data: {
+        apptId: appointment.apptId,
+        serialNumber: appointment.serialNumber,
+        doctorName: appointment.Schedule.Doctor.User.username,
+        scheduleDate: appointment.scheduleDate,
+        checkInStatus: appointment.checkInStatus
+      }
+    });
+    
+  } catch (error) {
+    console.error('签到验证失败:', error);
+    res.status(500).json({
+      code: 500,
+      message: '签到过程中发生错误',
       data: null
     });
   }
