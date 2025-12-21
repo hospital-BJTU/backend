@@ -43,6 +43,13 @@ const AppointmentModel = {
         defaultValue: 'pending',
         comment: '预约状态: pending(待就诊), called(待叫号), completed(已完成), missed(已过号), cancelled(已取消)'
       },
+      checkInStatus: {
+        field: 'check_in_status',
+        type: DataTypes.ENUM('not_checked', 'checked_in'),
+        allowNull: false,
+        defaultValue: 'not_checked',
+        comment: '签到状态: not_checked(未签到), checked_in(已签到)'
+      },
       isValid: {
         field: 'is_valid',
         type: DataTypes.TINYINT(1),
@@ -76,3 +83,18 @@ const AppointmentModel = {
 };
 
 module.exports = AppointmentModel;
+
+// 定义预约状态常量
+module.exports.APPOINTMENT_STATUS = {
+  PENDING: 'pending',    // 待叫号
+  CALLED: 'called',      // 已叫号
+  COMPLETED: 'completed',// 已完成
+  MISSED: 'missed',      // 已过号
+  CANCELLED: 'cancelled' // 已取消
+};
+
+// 定义签到状态常量
+module.exports.CHECK_IN_STATUS = {
+  NOT_CHECKED: 'not_checked', // 未签到
+  CHECKED_IN: 'checked_in'    // 已签到
+};
