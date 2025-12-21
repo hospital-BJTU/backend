@@ -20,6 +20,12 @@ const ScheduleModel = {
         allowNull: false,
         comment: '关联 tb_doctor 的ID，外键'
       },
+      deptId: {
+        field: 'dept_id',
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        comment: '关联 tb_department 的ID，外键'
+      },
       scheduleDate: {
         field: 'schedule_date',
         type: DataTypes.DATEONLY,
@@ -28,9 +34,12 @@ const ScheduleModel = {
       },
       timeSlot: {
         field: 'time_slot',
-        type: DataTypes.ENUM('AM', 'PM'),
+        type: DataTypes.ENUM(
+          '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
+          '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00'
+        ),
         allowNull: false,
-        comment: '时间段: AM(上午), PM(下午)'
+        comment: '时间段'
       },
       maxCount: {
         field: 'max_count',

@@ -19,9 +19,9 @@ function getStatusDescription(status) {
 async function getScheduleStatus(scheduleId) {
   try {
     const appointments = await Appointment.findAll({
-      where: { 
+      where: {
         scheduleId,
-        is_valid: 1,
+        isValid: 1,
         status: { [Op.in]: ['pending', 'called'] }
       },
       order: [['apptId', 'ASC']]
@@ -103,7 +103,7 @@ exports.markAppointmentCompletedByDoctor = async (req, res) => {
     const transaction = await Appointment.sequelize.transaction();
     try {
       const appointment = await Appointment.findOne({
-        where: { appt_id: apptId, is_valid: 1 },
+        where: { apptId: apptId, isValid: 1 },
         include: [{ model: Schedule }],
         transaction
       });
@@ -117,7 +117,7 @@ exports.markAppointmentCompletedByDoctor = async (req, res) => {
         });
       }
 
-      if (!appointment.Schedule || appointment.Schedule.doctor_id !== doctor.doctor_id) {
+      if (!appointment.Schedule || appointment.Schedule.doctorId !== doctor.doctorId) {
         await transaction.rollback();
         return res.status(403).json({
           code: 403,
@@ -310,7 +310,7 @@ exports.callAppointmentByDoctor = async (req, res) => {
 
       await transaction.commit();
       
-      // 获取更新后的排班状态信息
+      // 获取更新后的排班状态
       const updatedScheduleStatus = await getScheduleStatus(appointment.scheduleId);
 
       return res.status(200).json({
@@ -510,7 +510,8 @@ exports.getDoctorScheduleStatus = async (req, res) => {
           ]
         }
       ],
-      order: [['time_slot', 'ASC']]
+      // 第513行 - 修复time_slot
+      order: [['timeSlot', 'ASC']]
     });
     
     if (schedules.length === 0) {
@@ -546,7 +547,7 @@ exports.getDoctorScheduleStatus = async (req, res) => {
     const schedulesWithStatus = schedules.map((schedule) => {
       // 筛选出当前排班的预约记录
       const scheduleAppointments = allAppointments.filter(
-        appt => appt.schedule_id === schedule.schedule_id
+        appt => appt.scheduleId === schedule.scheduleId
       );
       
       // 计算各种状态的预约数量
@@ -557,58 +558,33 @@ exports.getDoctorScheduleStatus = async (req, res) => {
       const cancelledCount = scheduleAppointments.filter(appt => appt.status === 'cancelled').length;
       
       // 找出当前应该叫的序号（即第一个pending状态的预约）
-      const currentPending = scheduleAppointments.find(appt => appt.status === 'pending');
-      const currentQueuePosition = currentPending ? currentPending.serial_number : null;
-      
-      // 找出最后一个已叫号的预约
-      const lastCalled = scheduleAppointments.filter(appt => 
-        appt.status === 'called' || appt.status === 'completed' || appt.status === 'missed'
-      ).sort((a, b) => b.serial_number - a.serial_number)[0];
-      const lastCalledNumber = lastCalled ? lastCalled.serial_number : 0;
+      const currentPending = scheduleAppointments.filter(appt => appt.status === 'pending').sort((a, b) => a.serialNumber - b.serialNumber)[0];
+      const currentQueuePosition = currentPending ? currentPending.serialNumber : null;
+      // 获取最后叫号的serial_number
+      const lastCalled = scheduleAppointments.filter(appt => appt.status === 'called' || appt.status === 'completed').sort((a, b) => b.serialNumber - a.serialNumber)[0];
+      const lastCalledNumber = lastCalled ? lastCalled.serialNumber : 0;
       
       // 获取当前正在被呼叫的预约（called状态）
       const currentlyCalled = scheduleAppointments.find(appt => appt.status === 'called');
       
       return {
         // 排班基本信息
-        scheduleId: schedule.scheduleId,
-        scheduleDate: schedule.scheduleDate,
-        timeSlot: schedule.timeSlot,
-        maxCount: schedule.maxCount,
-        
-        // 号源库存信息
-        availableCount: schedule.availableCount,
-        total_appointments: scheduleAppointments.length,
-        remaining_count: schedule.maxCount - scheduleAppointments.length,
-        
-        // 叫号状态信息
-        called_count: calledCount,
-        completed_count: completedCount,
-        missed_count: missedCount,
-        pending_count: pendingCount,
-        cancelled_count: cancelledCount,
-        
-        // 当前叫号顺序信息
-        current_queue_position: currentQueuePosition,
-        last_called_number: lastCalledNumber,
-        next_to_call: currentQueuePosition || (lastCalledNumber + 1),
-        currently_called_appointment: currentlyCalled ? {
-          appointmentId: currentlyCalled.apptId,
-          serialNumber: currentlyCalled.serialNumber
-        } : null,
-        
-        // 操作日志信息
-        last_operation_time: recentCallLog ? recentCallLog.operationTime : null,
-        last_operation_type: recentCallLog ? recentCallLog.operation : null,
-        
-        // 医生信息
-        doctor: {
+        schedule: {
+          scheduleId: schedule.scheduleId,
+          scheduleDate: schedule.scheduleDate,
+          timeSlot: schedule.timeSlot,
           doctorId: schedule.Doctor.doctorId,
           doctorName: schedule.Doctor.User.username,
           doctorTitle: schedule.Doctor.title,
-          departmentName: schedule.Doctor.Department.deptName
-        }
-      };
+          departmentName: schedule.Doctor.Department ? schedule.Doctor.Department.deptName : null,
+          maxCount: schedule.maxCount,
+          availableCount: schedule.availableCount,
+          auditStatus: schedule.auditStatus
+        },
+        counts,
+        queue,
+        total: queue.length
+      }
     });
     
     return res.status(200).json({
@@ -621,7 +597,7 @@ exports.getDoctorScheduleStatus = async (req, res) => {
         total_schedules: schedulesWithStatus.length,
         // 添加整体统计信息
         summary: {
-          total_available_count: schedules.reduce((sum, s) => sum + s.available_count, 0),
+          totalAvailableCount: schedules.reduce((sum, s) => sum + s.availableCount, 0),
           total_appointments_count: schedulesWithStatus.reduce((sum, s) => sum + s.total_appointments, 0),
           total_completed_count: schedulesWithStatus.reduce((sum, s) => sum + s.completed_count, 0)
         }
@@ -650,7 +626,7 @@ async function getScheduleStatus(scheduleId) {
     // 获取该排班下的所有有效预约
     const appointments = await Appointment.findAll({
       where: {
-        scheduleId: scheduleId,
+        scheduleId: schedule.scheduleId,
         isValid: 1
       },
       order: [['serialNumber', 'ASC']]
@@ -712,7 +688,7 @@ function getStatusDescription(status) {
 // 医生端队列查询（按排班查看当前队列）
 exports.getDoctorQueue = async (req, res) => {
   try {
-    // 用户信息空值检测
+    const { scheduleId, date, timeSlot, status } = { ...(req.query || {}), ...(req.body || {}) };
     const userInfo = req.user;
     if (!userInfo) {
       return res.status(401).json({
@@ -721,7 +697,7 @@ exports.getDoctorQueue = async (req, res) => {
         data: null
       });
     }
-    
+
     const { userId, role } = userInfo;
     if (!userId || !role) {
       return res.status(401).json({
@@ -730,8 +706,7 @@ exports.getDoctorQueue = async (req, res) => {
         data: null
       });
     }
-    
-    // 角色校验
+
     if (role !== 'doctor') {
       return res.status(403).json({
         code: 403,
@@ -740,7 +715,6 @@ exports.getDoctorQueue = async (req, res) => {
       });
     }
 
-    // 查医生档案
     const doctor = await Doctor.findOne({ where: { userId: userId } });
     if (!doctor) {
       return res.status(404).json({
@@ -750,7 +724,6 @@ exports.getDoctorQueue = async (req, res) => {
       });
     }
 
-    // 确定排班
     let scheduleWhere = { doctorId: doctor.doctorId };
     if (scheduleId) {
       scheduleWhere.scheduleId = scheduleId;
@@ -787,7 +760,6 @@ exports.getDoctorQueue = async (req, res) => {
       });
     }
 
-    // 状态过滤：默认仅展示 pending + called 作为当前队列
     let statusFilter;
     if (status) {
       const list = Array.isArray(status) ? status : String(status).split(',');
@@ -803,12 +775,11 @@ exports.getDoctorQueue = async (req, res) => {
         status: statusFilter
       },
       include: [
-        { model: User, attributes: ['user_id', 'username'] }
+        { model: User, attributes: ['user_id', 'username'], required: true }
       ],
-      order: [['serial_number', 'ASC']]
+      order: [['serialNumber', 'ASC']]
     });
 
-    // 汇总计数
     const counts = {
       pending: appointments.filter(a => a.status === 'pending').length,
       called: appointments.filter(a => a.status === 'called').length,
@@ -816,15 +787,14 @@ exports.getDoctorQueue = async (req, res) => {
       completed: appointments.filter(a => a.status === 'completed').length
     };
 
-    // 格式化队列
     const queue = appointments.map(a => ({
       appointmentId: a.appt_id,
       patientId: a.User.user_id,
       patientName: a.User.username,
-      serialNumber: a.serial_number,
+      serialNumber: a.serialNumber,
       status: a.status,
       statusDescription: getStatusDescription(a.status),
-      appointmentTime: a.appointment_time
+      appointmentTime: a.appointmentTime
     }));
 
     return res.status(200).json({
@@ -832,15 +802,16 @@ exports.getDoctorQueue = async (req, res) => {
       message: '查询成功',
       data: {
         schedule: {
-          scheduleId: schedule.schedule_id,
-          scheduleDate: schedule.schedule_date,
-          timeSlot: schedule.time_slot,
-          doctorId: schedule.Doctor.doctor_id,
+          scheduleId: schedule.scheduleId,
+          scheduleDate: schedule.scheduleDate,
+          timeSlot: schedule.timeSlot,
+          doctorId: schedule.Doctor.doctorId,
           doctorName: schedule.Doctor.User.username,
           doctorTitle: schedule.Doctor.title,
-          departmentName: schedule.Doctor.Department.dept_name,
-          maxCount: schedule.max_count,
-          availableCount: schedule.available_count
+          departmentName: schedule.Doctor.Department ? schedule.Doctor.Department.deptName : null,
+          maxCount: schedule.maxCount,
+          availableCount: schedule.availableCount,
+          auditStatus: schedule.auditStatus
         },
         counts,
         queue,
@@ -902,20 +873,20 @@ exports.getScheduledDates = async (req, res) => {
     if (doctorId) {
       // 使用查询参数中的医生ID
       const schedules = await Schedule.findAll({
-        attributes: ['schedule_date'],
+        attributes: ['scheduleDate'],
         where: {
-          doctor_id: doctorId,
-          schedule_date: {
+          doctorId: doctorId,
+          scheduleDate: {
             [Op.between]: [startDate, endDateStr]
           }
         },
-        group: ['schedule_date'],
+        group: ['scheduleDate'],
         raw: true
       });
       
       // 确保正确处理日期格式，无论数据库返回的是什么类型
       const dates = schedules.map(s => {
-        const date = s.schedule_date;
+        const date = s.scheduleDate;
         if (date instanceof Date) {
           return date.toISOString().split('T')[0];
         } else if (typeof date === 'string') {
@@ -943,20 +914,20 @@ exports.getScheduledDates = async (req, res) => {
     
     // 使用认证用户的医生ID查询排班
     const schedules = await Schedule.findAll({
-      attributes: ['schedule_date'],
+      attributes: ['scheduleDate'],
       where: {
-        doctor_id: userDoctorId,
-        schedule_date: {
+        doctorId: userDoctorId,
+        scheduleDate: {
           [Op.between]: [startDate, endDateStr]
         }
       },
-      group: ['schedule_date'],
+      group: ['scheduleDate'],
       raw: true
     });
     
     // 确保正确处理日期格式，无论数据库返回的是什么类型
     const dates = schedules.map(s => {
-      const date = s.schedule_date;
+      const date = s.scheduleDate;
       if (date instanceof Date) {
         return date.toISOString().split('T')[0];
       } else if (typeof date === 'string') {
@@ -1002,18 +973,18 @@ exports.getScheduleDetailsByDate = async (req, res) => {
 
     const schedules = await Schedule.findAll({
       where: {
-        doctor_id: userDoctorId,
-        schedule_date: date
+        doctorId: userDoctorId,
+        scheduleDate: date
       },
-      order: [['time_slot', 'ASC']]
+      order: [['timeSlot', 'ASC']]
     });
 
     const formattedDetails = await Promise.all(schedules.map(async (schedule) => {
         // 统计当前排班下已预约人数
         const pendingAppointments = await Appointment.count({
             where: {
-                schedule_id: schedule.scheduleId,
-                is_valid: 1,
+                scheduleId: schedule.scheduleId,
+                isValid: 1,
                 status: { [Op.in]: ['pending', 'called'] }
             }
         });
@@ -1026,7 +997,8 @@ exports.getScheduleDetailsByDate = async (req, res) => {
             timeSlot: schedule.timeSlot,
             maxCount: schedule.maxCount,
             availableCount: schedule.availableCount,
-            status: status, 
+            status: status,
+            auditStatus: schedule.auditStatus,
             pendingAppointments: pendingAppointments
         };
     }));
@@ -1069,7 +1041,7 @@ exports.requestLeaveForSchedule = async (req, res) => {
     if (!doctor) {
         return res.status(403).json({ code: 403, message: '医生信息不存在或无权操作' });
     }
-    const doctorId = doctor.doctorId; 
+    const doctorId = doctor.doctor_id; 
     
     const parsedScheduleId = parseInt(scheduleId, 10);
     
@@ -1078,9 +1050,9 @@ exports.requestLeaveForSchedule = async (req, res) => {
         // 2. 查找排班并校验权限和状态
         const schedule = await Schedule.findOne({ 
             where: { 
-                scheduleId: parsedScheduleId,
-                doctorId: doctorId, // 校验权限
-                auditStatus: 'approved' // 只能对已批准的排班请假
+                schedule_id: parsedScheduleId,
+                doctor_id: doctorId, // 校验权限
+                audit_status: 'approved' // 只能对已批准的排班请假
             },
             transaction 
         });
@@ -1179,7 +1151,7 @@ exports.proposeSchedule = async (req, res) => {
     const existingSchedule = await Schedule.findOne({
       where: {
         doctorId: doctorId,
-        scheduleDate: scheduleDate, // 假设 Schedule Model 使用驼峰命名
+        scheduleDate: scheduleDate,
         timeSlot: timeSlot
       }
     });
@@ -1195,9 +1167,9 @@ exports.proposeSchedule = async (req, res) => {
       doctorId: doctorId,
       scheduleDate: scheduleDate,
       timeSlot: timeSlot,
-      maxCount: finalMaxCount,       // 使用最终确定的最大人数
-      availableCount: finalMaxCount,  // 可用人数等于最大人数
-      auditStatus: 'pending'         // 状态设置为待审核
+      maxCount: finalMaxCount,
+      availableCount: finalMaxCount,
+      auditStatus: 'pending'
     }, { transaction });
 
     await transaction.commit();

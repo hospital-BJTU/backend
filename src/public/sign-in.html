@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>医院签到系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Microsoft YaHei', sans-serif;
+        }
+
+        body {
+            background-color: #f5f5f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .btn:hover {
+            background-color: #45a049;
+        }
+
+        .btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            display: none;
+        }
+
+        .result.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            display: block;
+        }
+
+        .result.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+            display: block;
+        }
+
+        .info-box {
+            background-color: #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        .info-box p {
+            color: #495057;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        .info-box p:last-child {
+            margin-bottom: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>医院签到系统</h1>
+            <p>请输入您的身份信息进行签到</p>
+        </div>
+
+        <div id="infoBox" class="info-box" style="display: none;">
+            <p><strong>科室：</strong><span id="deptName"></span></p>
+            <p><strong>医生：</strong><span id="doctorName"></span></p>
+            <p><strong>日期：</strong><span id="todayDate"></span></p>
+        </div>
+
+        <form id="signInForm">
+            <div class="form-group">
+                <label for="realName">姓名</label>
+                <input type="text" id="realName" name="realName" required placeholder="请输入您的真实姓名">
+            </div>
+
+            <div class="form-group">
+                <label for="idCard">身份证号</label>
+                <input type="text" id="idCard" name="idCard" required placeholder="请输入您的身份证号码">
+            </div>
+
+            <button type="submit" class="btn" id="submitBtn">提交签到</button>
+        </form>
+
+        <div id="result" class="result"></div>
+    </div>
+
+    <script>
+        // 获取URL参数
+        function getUrlParams() {
+            const params = {};
+            const urlParams = new URLSearchParams(window.location.search);
+            for (const [key, value] of urlParams) {
+                params[key] = value;
+            }
+            return params;
+        }
+
+        // 设置今日日期
+        document.getElementById('todayDate').textContent = new Date().toLocaleDateString('zh-CN');
+
+        // 获取签到页面配置
+        async function getSignInConfig() {
+            const params = getUrlParams();
+            const query = new URLSearchParams(params).toString();
+            
+            try {
+                const response = await fetch(`/api/qrcode/sign-in-page-config?${query}`);
+                const data = await response.json();
+                
+                if (data.code === 200) {
+                    const infoBox = document.getElementById('infoBox');
+                    const deptName = document.getElementById('deptName');
+                    const doctorName = document.getElementById('doctorName');
+                    
+                    if (data.data.deptName) {
+                        deptName.textContent = data.data.deptName;
+                        infoBox.style.display = 'block';
+                    }
+                    
+                    if (data.data.doctorName) {
+                        doctorName.textContent = data.data.doctorName;
+                        infoBox.style.display = 'block';
+                    }
+                }
+            } catch (error) {
+                console.error('获取签到配置失败:', error);
+            }
+        }
+
+        // 表单提交事件
+        document.getElementById('signInForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const realName = document.getElementById('realName').value;
+            const idCard = document.getElementById('idCard').value;
+            const submitBtn = document.getElementById('submitBtn');
+            const result = document.getElementById('result');
+            
+            // 简单验证
+            if (!realName || !idCard) {
+                result.className = 'result error';
+                result.textContent = '请填写完整的身份信息';
+                result.style.display = 'block';
+                return;
+            }
+            
+            // 身份证格式简单验证
+            if (!/^\d{17}[\dXx]$/.test(idCard)) {
+                result.className = 'result error';
+                result.textContent = '请输入有效的身份证号码';
+                result.style.display = 'block';
+                return;
+            }
+            
+            // 姓名格式简单验证
+            if (!/^[\u4e00-\u9fa5]{2,6}$/.test(realName)) {
+                result.className = 'result error';
+                result.textContent = '请输入有效的中文姓名（2-6个字符）';
+                result.style.display = 'block';
+                return;
+            }
+            
+            // 显示加载状态
+            submitBtn.disabled = true;
+            submitBtn.textContent = '签到中...';
+            result.style.display = 'none';
+            
+            try {
+                // 调用签到接口
+                const response = await fetch('/api/user/verify-sign-in', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ realName, idCard })
+                });
+                
+                const data = await response.json();
+                
+                if (data.code === 200) {
+                    result.className = 'result success';
+                    result.innerHTML = `
+                        <p>签到成功！</p>
+                        <p>预约号：${data.data.apptId}</p>
+                        <p>序号：${data.data.serialNumber}</p>
+                        <p>医生：${data.data.doctorName}</p>
+                        <p>日期：${data.data.scheduleDate}</p>
+                    `;
+                    result.style.display = 'block';
+                } else {
+                    result.className = 'result error';
+                    result.textContent = data.message || '签到失败';
+                    result.style.display = 'block';
+                }
+            } catch (error) {
+                result.className = 'result error';
+                result.textContent = '网络错误，请稍后重试';
+                result.style.display = 'block';
+                console.error('签到请求失败:', error);
+            } finally {
+                // 恢复按钮状态
+                submitBtn.disabled = false;
+                submitBtn.textContent = '提交签到';
+            }
+        });
+
+        // 页面加载时获取配置
+        getSignInConfig();
+    </script>
+</body>
+</html>

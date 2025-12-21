@@ -73,7 +73,49 @@ async function fixScheduleTable() {
         return false;  // 添加返回值
     }
     
-    // 4. 重新启用外键检查
+    // 4. 检查并更新time_slot字段的枚举值
+    const [timeSlotColumns] = await sequelize.query(
+      "SHOW COLUMNS FROM tb_schedule WHERE Field = 'time_slot';"
+    );
+    
+    if (timeSlotColumns.length > 0) {
+      const enumValues = timeSlotColumns[0].Type;
+      // 检查是否已经包含所需的枚举值
+      if (enumValues.includes('08:00-09:00')) {
+        logInfo('tb_schedule表的time_slot字段枚举值已包含所有所需值');
+      } else {
+        logInfo('发现time_slot字段枚举值需要更新，从AM/PM改为具体时间段');
+        
+        // 方法：先转为VARCHAR，更新值后再转回ENUM
+        // 1. 将字段类型改为VARCHAR
+        await sequelize.query(`
+          ALTER TABLE tb_schedule 
+          MODIFY COLUMN time_slot VARCHAR(20) NOT NULL;
+        `);
+        logSuccess('已将time_slot字段类型改为VARCHAR');
+        
+        // 2. 更新所有AM/PM值为具体时间段
+        await sequelize.query(`
+          UPDATE tb_schedule SET time_slot = '09:00-10:00' WHERE time_slot = 'AM';
+        `);
+        await sequelize.query(`
+          UPDATE tb_schedule SET time_slot = '14:00-15:00' WHERE time_slot = 'PM';
+        `);
+        logSuccess('已将所有time_slot值更新为具体时间段');
+        
+        // 3. 将字段类型改回ENUM
+        await sequelize.query(`
+          ALTER TABLE tb_schedule 
+          MODIFY COLUMN time_slot ENUM('08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00', '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00') NOT NULL;
+        `);
+        logSuccess('time_slot字段修复成功，已更新为具体时间段');
+      }
+    } else {
+        logError('time_slot字段不存在于tb_schedule表中');
+        return false;
+    }
+
+    // 5. 重新启用外键检查
     await sequelize.query('SET FOREIGN_KEY_CHECKS = 1;');
     logInfo('已重新启用外键检查');
     
@@ -472,6 +514,7 @@ function showHelp() {
   console.log('  --user, -u         仅修复tb_user表');
   console.log('  --audit-log, -l    仅修复tb_audit_log表');
   console.log('  --anti-hoarding, -o仅修复tb_anti_hoarding_log表');
+  console.log('  --randomize-slots, -r 随机化现有号源的时间段');
   console.log('  --help, -h         显示此帮助信息');
   console.log('');
   console.log('示例:');
@@ -480,6 +523,7 @@ function showHelp() {
   console.log('  node scripts/database_fix_tool.js --user');
   console.log('  node scripts/database_fix_tool.js -l');
   console.log('  node scripts/database_fix_tool.js --anti-hoarding');
+  console.log('  node scripts/database_fix_tool.js --randomize-slots');
 }
 
 // 主函数
@@ -501,6 +545,8 @@ async function main() {
         operation = 'audit-log';
       } else if (arg === '--anti-hoarding' || arg === '-o') {
         operation = 'anti-hoarding';
+      } else if (arg === '--randomize-slots' || arg === '-r') {
+        operation = 'randomize-slots';
       } else if (arg === '--all' || arg === '-a') {
         operation = 'all';
       } else {
@@ -530,6 +576,9 @@ async function main() {
         break;
       case 'anti-hoarding':
         success = await fixAntiHoardingLogTable();
+        break;
+      case 'randomize-slots':
+        success = await randomizeTimeSlots();
         break;
       case 'all':
       default:
@@ -566,5 +615,43 @@ module.exports = {
   fixUserTable,
   fixAuditLogTable,
   fixAntiHoardingLogTable,
-  runAllFixes
+  runAllFixes,
+  randomizeTimeSlots
 };
+
+// 随机化现有号源的时间段
+async function randomizeTimeSlots() {
+  try {
+    logInfo('开始随机化号源时间段...');
+    
+    // 定义所有可用的时间段
+    const timeSlots = ['08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00', '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00'];
+    
+    // 获取所有号源记录
+    const [schedules] = await sequelize.query(
+      "SELECT schedule_id FROM tb_schedule;"
+    );
+    
+    if (schedules.length === 0) {
+      logWarning('未找到任何号源记录');
+      return true;
+    }
+    
+    // 逐行更新每个记录的时间段
+    for (const schedule of schedules) {
+      // 随机选择一个时间段
+      const randomSlot = timeSlots[Math.floor(Math.random() * timeSlots.length)];
+      
+      // 使用简单的SQL语句直接更新
+      await sequelize.query(
+        `UPDATE tb_schedule SET time_slot = '${randomSlot}' WHERE schedule_id = ${schedule.schedule_id};`
+      );
+    }
+    
+    logSuccess(`已成功随机化 ${schedules.length} 条号源记录的时间段`);
+    return true;
+  } catch (error) {
+    logError('随机化时间段时出错: ' + error.message);
+    return false;
+  }
+}

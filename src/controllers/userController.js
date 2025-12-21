@@ -1,4 +1,4 @@
-const { User } = require('../models');
+const { User, UserProfile } = require('../models');
 const { Op } = require('sequelize');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
@@ -269,20 +269,14 @@ exports.loginUser = async (req, res) => {
       });
     }
     
-    // 验证密码 - 支持明文密码（数据库中密码未哈希的情况）
+    // 验证密码 - 只使用bcrypt验证
     let isPasswordValid = false;
     
     try {
-      // 尝试使用bcrypt验证（如果密码是哈希过的）
+      // 只使用bcrypt验证密码
       isPasswordValid = await bcrypt.compare(password, user.password);
     } catch (error) {
-      // bcrypt验证失败，可能是明文密码
-      console.log('Bcrypt验证失败，尝试直接比较明文密码');
-    }
-    
-    // 如果bcrypt验证失败，尝试直接比较明文密码
-    if (!isPasswordValid) {
-      isPasswordValid = (password === user.password);
+      console.error('密码验证失败:', error);
     }
     
     if (!isPasswordValid) {
@@ -355,6 +349,47 @@ exports.verifyUser = async (req, res) => {
         data: null
       });
     }
+    
+    // 获取请求参数
+    const { realName, idCard } = req.body;
+    
+    // 验证参数完整性
+    if (!realName || !idCard) {
+      return res.status(400).json({
+        code: 400,
+        message: '请填写完整的身份信息',
+        data: null
+      });
+    }
+    
+    // 验证真实姓名格式
+    const validateRealName = (name) => {
+      const regex = /^[\u4e00-\u9fa5]{2,20}$/;
+      return regex.test(name);
+    };
+    
+    // 验证身份证号码格式
+    const validateIdCard = (id) => {
+      const regex = /^[1-9]\d{5}(18|19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx]$/;
+      return regex.test(id);
+    };
+    
+    // 验证参数格式
+    if (!validateRealName(realName)) {
+      return res.status(400).json({
+        code: 400,
+        message: '真实姓名格式不正确，请输入2-20个中文字符',
+        data: null
+      });
+    }
+    
+    if (!validateIdCard(idCard)) {
+      return res.status(400).json({
+        code: 400,
+        message: '身份证号码格式不正确，请输入有效的18位身份证号码',
+        data: null
+      });
+    }
      
     // 查找用户
     const user = await User.findByPk(user_id);
@@ -378,8 +413,27 @@ exports.verifyUser = async (req, res) => {
       });
     }
     
-    // 简化的身份核验逻辑，直接更新用户状态
-    // 在实际应用中，可以根据业务需求添加适当的验证步骤
+    // 查找用户详细信息
+    const userProfile = await UserProfile.findOne({ where: { userId: user_id } });
+    
+    if (!userProfile) {
+      return res.status(404).json({
+        code: 404,
+        message: '用户详细信息不存在，请先完善个人信息',
+        data: null
+      });
+    }
+    
+    // 验证身份信息是否匹配
+    if (userProfile.realName !== realName || userProfile.idCard !== idCard) {
+      return res.status(401).json({
+        code: 401,
+        message: '身份证号码或姓名与注册信息不匹配',
+        data: null
+      });
+    }
+    
+    // 身份信息匹配，更新用户核验状态
     await user.update({
       verifyStatus: 'verified'
     });
@@ -661,3 +715,94 @@ exports.resetPassword = async (req, res) => {
   }
 };
 
+
+// 修改密码（已登录用户）
+exports.changePassword = async (req, res) => {
+  try {
+    // 请求体存在性检测
+    if (!req.body) {
+      return res.status(400).json({
+        code: 400,
+        message: '请求体不能为空',
+        data: null
+      });
+    }
+    
+    // 从JWT中间件获取用户ID
+    const { user_id } = req.user;
+    
+    // 确保user_id存在
+    if (!user_id) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户信息不完整',
+        data: null
+      });
+    }
+    
+    const { oldPassword, newPassword } = req.body;
+    
+    // 基本验证
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({
+        code: 400,
+        message: '请提供原密码和新密码',
+        data: null
+      });
+    }
+    
+    // 密码强度验证
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        code: 400,
+        message: '新密码长度不能少于6位',
+        data: null
+      });
+    }
+    
+    // 查找用户
+    const user = await User.findOne({ where: { userId: user_id } });
+    if (!user) {
+      return res.status(404).json({
+        code: 404,
+        message: '用户不存在',
+        data: null
+      });
+    }
+    
+    // 验证原密码 - 只使用bcrypt验证
+    let isPasswordValid = false;
+    
+    try {
+      // 只使用bcrypt验证密码
+      isPasswordValid = await bcrypt.compare(oldPassword, user.password);
+    } catch (error) {
+      console.error('原密码验证失败:', error);
+    }
+    
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        code: 401,
+        message: '原密码错误',
+        data: null
+      });
+    }
+    
+    // 更新密码
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await user.update({ password: hashedPassword });
+    
+    res.status(200).json({
+      code: 200,
+      message: '密码修改成功',
+      data: null
+    });
+  } catch (error) {
+    console.error('修改密码失败:', error);
+    res.status(500).json({
+      code: 500,
+      message: '修改密码失败',
+      data: null
+    });
+  }
+};
