@@ -378,6 +378,52 @@ async function fixAuditLogTable() {
   }
 }
 
+// 修复tb_schedule表的函数，添加allow_waiting字段
+async function fixScheduleTableAllowWaiting() {
+  try {
+    logInfo('开始修复tb_schedule表的allow_waiting字段...');
+    
+    // 检查表是否存在
+    const [tables] = await sequelize.query(
+      "SHOW TABLES LIKE 'tb_schedule';"
+    );
+    
+    if (tables.length === 0) {
+      logWarning('tb_schedule表不存在，无法修复');
+      return false;
+    }
+    
+    // 检查allow_waiting字段是否已存在
+    const [columns] = await sequelize.query(
+      "SHOW COLUMNS FROM tb_schedule WHERE Field = 'allow_waiting';"
+    );
+    
+    if (columns.length > 0) {
+      logInfo('allow_waiting字段已存在于tb_schedule表中');
+      // 更新现有记录的allow_waiting字段为true
+      await sequelize.query(`
+        UPDATE tb_schedule 
+        SET allow_waiting = TRUE;
+      `);
+      logInfo('已将所有现有排班的allow_waiting字段更新为true');
+    } else {
+      logInfo('allow_waiting字段不存在，将添加到tb_schedule表中');
+      // 添加allow_waiting字段
+      await sequelize.query(`
+        ALTER TABLE tb_schedule 
+        ADD COLUMN allow_waiting BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否开放候补功能，默认为true';
+      `);
+      logSuccess('allow_waiting字段添加成功');
+    }
+    
+    logSuccess('tb_schedule表的allow_waiting字段修复完成！');
+    return true;
+  } catch (error) {
+    logError('修复tb_schedule表时出错: ' + error.message);
+    return false;
+  }
+}
+
 // 修复tb_anti_hoarding_log表的函数
 async function fixAntiHoardingLogTable() {
   try {
@@ -465,6 +511,119 @@ async function fixAntiHoardingLogTable() {
   }
 }
 
+// 创建或修复tb_waiting_list表的函数
+async function fixWaitingListTable() {
+  try {
+    logInfo('开始创建/修复tb_waiting_list表结构...');
+    
+    // 检查表是否存在
+    const [tables] = await sequelize.query(
+      "SHOW TABLES LIKE 'tb_waiting_list';"
+    );
+    
+    // 临时禁用外键检查
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 0;');
+    logInfo('已禁用外键检查');
+    
+    if (tables.length === 0) {
+      // 表不存在，需要创建
+      logInfo('tb_waiting_list表不存在，开始创建...');
+      
+      await sequelize.query(`
+        CREATE TABLE tb_waiting_list (
+          waiting_id INT AUTO_INCREMENT PRIMARY KEY COMMENT '候补ID',
+          user_id INT NOT NULL COMMENT '关联tb_user的ID，外键',
+          schedule_id INT NOT NULL COMMENT '关联tb_schedule的ID，外键',
+          waiting_number INT NOT NULL COMMENT '候补序号',
+          waiting_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '加入候补时间',
+          status ENUM('waiting', 'converted', 'cancelled', 'expired') DEFAULT 'waiting' COMMENT '候补状态',
+          converted_to_appt_id INT NULL COMMENT '转换后的预约ID，关联tb_appointment表',
+          converted_at DATETIME NULL COMMENT '转换为预约的时间',
+          INDEX idx_user_id (user_id),
+          INDEX idx_schedule_id (schedule_id),
+          INDEX idx_status (status),
+          UNIQUE KEY unique_user_schedule (user_id, schedule_id),
+          FOREIGN KEY (user_id) REFERENCES tb_user(user_id) ON DELETE CASCADE,
+          FOREIGN KEY (schedule_id) REFERENCES tb_schedule(schedule_id) ON DELETE CASCADE,
+          FOREIGN KEY (converted_to_appt_id) REFERENCES tb_appointment(appt_id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      `);
+      
+      logSuccess('tb_waiting_list表创建成功！');
+    } else {
+      // 表已存在，检查并修复结构
+      logInfo('tb_waiting_list表已存在，检查结构...');
+      
+      // 检查表结构是否符合要求
+      let needToRecreate = false;
+      
+      // 检查必要的字段是否存在
+      const [columns] = await sequelize.query(
+        "SHOW COLUMNS FROM tb_waiting_list;"
+      );
+      
+      const requiredColumns = ['waiting_id', 'user_id', 'schedule_id', 'waiting_number', 'waiting_time', 'status', 'converted_to_appt_id', 'converted_at'];
+      const existingColumns = columns.map(col => col.Field);
+      
+      // 检查是否缺少必要字段
+      const missingColumns = requiredColumns.filter(col => !existingColumns.includes(col));
+      if (missingColumns.length > 0) {
+        logWarning(`缺少必要字段: ${missingColumns.join(', ')}`);
+        needToRecreate = true;
+      }
+      
+      if (needToRecreate) {
+        logWarning('表结构不符合要求，将被删除并重新创建');
+        logWarning('警告：这将丢失所有现有的候补数据！');
+        
+        // 先删除表
+        await sequelize.query('DROP TABLE IF EXISTS tb_waiting_list');
+        logInfo('已删除旧表');
+        
+        // 重新创建表
+        await sequelize.query(`
+          CREATE TABLE tb_waiting_list (
+            waiting_id INT AUTO_INCREMENT PRIMARY KEY COMMENT '候补ID',
+            user_id INT NOT NULL COMMENT '关联tb_user的ID，外键',
+            schedule_id INT NOT NULL COMMENT '关联tb_schedule的ID，外键',
+            waiting_number INT NOT NULL COMMENT '候补序号',
+            waiting_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '加入候补时间',
+            status ENUM('waiting', 'converted', 'cancelled', 'expired') DEFAULT 'waiting' COMMENT '候补状态',
+            converted_to_appt_id INT NULL COMMENT '转换后的预约ID，关联tb_appointment表',
+            converted_at DATETIME NULL COMMENT '转换为预约的时间',
+            INDEX idx_user_id (user_id),
+            INDEX idx_schedule_id (schedule_id),
+            INDEX idx_status (status),
+            UNIQUE KEY unique_user_schedule (user_id, schedule_id),
+            FOREIGN KEY (user_id) REFERENCES tb_user(user_id) ON DELETE CASCADE,
+              FOREIGN KEY (schedule_id) REFERENCES tb_schedule(schedule_id) ON DELETE CASCADE,
+              FOREIGN KEY (converted_to_appt_id) REFERENCES tb_appointment(appt_id) ON DELETE SET NULL
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        `);
+        
+        logSuccess('tb_waiting_list表已重新创建！');
+      } else {
+        logSuccess('tb_waiting_list表结构符合要求，无需修复！');
+      }
+    }
+    
+    // 重新启用外键检查
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 1;');
+    logInfo('已重新启用外键检查');
+    
+    return true;
+  } catch (error) {
+    logError('修复tb_waiting_list表结构时发生错误: ' + error.message);
+    // 确保重新启用外键检查
+    try {
+      await sequelize.query('SET FOREIGN_KEY_CHECKS = 1;');
+    } catch (e) {
+      // 忽略错误
+    }
+    return false;
+  }
+}
+
 // 运行所有修复的函数
 async function runAllFixes() {
   let success = true;
@@ -472,7 +631,7 @@ async function runAllFixes() {
   logInfo('开始执行所有数据库修复操作...');
   console.log('='.repeat(60));
   
-  // 先修复schedule表，因为audit_log表依赖于它
+  // 先修复schedule表，因为其他表可能依赖于它
   const scheduleResult = await fixScheduleTable();
   success = success && scheduleResult;
   
@@ -490,6 +649,16 @@ async function runAllFixes() {
   
   const antiHoardingLogResult = await fixAntiHoardingLogTable();
   success = success && antiHoardingLogResult;
+  
+  console.log('='.repeat(60));
+  
+  const waitingListResult = await fixWaitingListTable();
+  success = success && waitingListResult;
+  
+  console.log('='.repeat(60));
+  
+  const scheduleAllowWaitingResult = await fixScheduleTableAllowWaiting();
+  success = success && scheduleAllowWaitingResult;
   
   console.log('='.repeat(60));
   
@@ -514,6 +683,8 @@ function showHelp() {
   console.log('  --user, -u         仅修复tb_user表');
   console.log('  --audit-log, -l    仅修复tb_audit_log表');
   console.log('  --anti-hoarding, -o仅修复tb_anti_hoarding_log表');
+  console.log('  --waiting-list, -w 仅创建/修复tb_waiting_list表');
+  console.log('  --allow-waiting, -t 仅添加allow_waiting字段到排班级别');
   console.log('  --randomize-slots, -r 随机化现有号源的时间段');
   console.log('  --help, -h         显示此帮助信息');
   console.log('');
@@ -523,6 +694,7 @@ function showHelp() {
   console.log('  node scripts/database_fix_tool.js --user');
   console.log('  node scripts/database_fix_tool.js -l');
   console.log('  node scripts/database_fix_tool.js --anti-hoarding');
+  console.log('  node scripts/database_fix_tool.js --waiting-list');
   console.log('  node scripts/database_fix_tool.js --randomize-slots');
 }
 
@@ -545,8 +717,12 @@ async function main() {
         operation = 'audit-log';
       } else if (arg === '--anti-hoarding' || arg === '-o') {
         operation = 'anti-hoarding';
+      } else if (arg === '--waiting-list' || arg === '-w') {
+        operation = 'waiting-list';
       } else if (arg === '--randomize-slots' || arg === '-r') {
         operation = 'randomize-slots';
+      } else if (arg === '--allow-waiting' || arg === '-t') {
+        operation = 'allow-waiting';
       } else if (arg === '--all' || arg === '-a') {
         operation = 'all';
       } else {
@@ -577,8 +753,14 @@ async function main() {
       case 'anti-hoarding':
         success = await fixAntiHoardingLogTable();
         break;
+      case 'waiting-list':
+        success = await fixWaitingListTable();
+        break;
       case 'randomize-slots':
         success = await randomizeTimeSlots();
+        break;
+      case 'allow-waiting':
+        success = await fixScheduleTableAllowWaiting();
         break;
       case 'all':
       default:
@@ -615,6 +797,7 @@ module.exports = {
   fixUserTable,
   fixAuditLogTable,
   fixAntiHoardingLogTable,
+  fixWaitingListTable,
   runAllFixes,
   randomizeTimeSlots
 };

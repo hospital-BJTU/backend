@@ -69,17 +69,6 @@ const createRateLimiter = (options = {}) => {
         await set(key, 1, seconds);
       }
       
-      // 记录正常请求日志（可选，可以根据需求决定是否记录所有请求）
-      // 这里暂时不记录所有正常请求，避免日志过多
-      // 仅在实际应用中根据需要启用
-      /*
-      await AntiHoardingLog.create({
-        userId: req.user?.userId || null,
-        ipAddress: clientIp,
-        requestTime: new Date(),
-        logType: 'normal_operation'
-      });
-      */
       
       // 设置剩余请求数响应头（可选）
       const remaining = maxRequests - (currentCount ? parseInt(currentCount) + 1 : 1);
@@ -107,8 +96,8 @@ const rateLimitMiddleware = {
   
   // 预约接口限流
   appointmentLimiter: createRateLimiter({
-    maxRequests: 3,
-    windowMs: 300000, // 5分钟内最多3次预约请求
+    maxRequests: 10, // 临时增加到100次用于测试
+    windowMs: 60000, // 5分钟内最多100次预约请求
     action: 'appointment'
   }),
   
@@ -132,23 +121,4 @@ module.exports = {
   ...rateLimitMiddleware
 };
 
-/**
- * 使用示例：
- * 
- * 1. 在Express路由中使用预定义的限流中间件：
- * const { appointmentLimiter } = require('../utils/rateLimitMiddleware');
- * router.post('/appointment', appointmentLimiter, appointmentController.bookAppointment);
- * 
- * 2. 创建自定义限流中间件：
- * const { createRateLimiter } = require('../utils/rateLimitMiddleware');
- * const customLimiter = createRateLimiter({
- *   maxRequests: 15,
- *   windowMs: 60000,
- *   action: 'custom_action'
- * });
- * router.use('/custom', customLimiter);
- * 
- * 3. 确保在应用启动时连接Redis：
- * const { connectRedis } = require('../config/redis');
- * await connectRedis();
- */
+
