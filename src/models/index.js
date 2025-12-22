@@ -44,47 +44,51 @@ Doctor.belongsTo(User, { foreignKey: 'user_id', onDelete: 'CASCADE' });
 Department.hasMany(Doctor, { foreignKey: 'dept_id', onDelete: 'CASCADE' });
 Doctor.belongsTo(Department, { foreignKey: 'dept_id', onDelete: 'CASCADE' });
 
-// 4. Doctor <-> Schedule (Schedule.doctorId 是 NOT NULL) 👈 解决本次报错
+// 4. Department <-> Schedule (Schedule.deptId 是 NOT NULL)
+Department.hasMany(Schedule, { foreignKey: 'dept_id', onDelete: 'CASCADE' });
+Schedule.belongsTo(Department, { foreignKey: 'dept_id', onDelete: 'CASCADE' });
+
+// 5. Doctor <-> Schedule (Schedule.doctorId 是 NOT NULL)
 Doctor.hasMany(Schedule, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
 Schedule.belongsTo(Doctor, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
 
-// 5. User <-> Appointment (Appointment.userId 是 NOT NULL)
+// 6. User <-> Appointment (Appointment.userId 是 NOT NULL)
 User.hasMany(Appointment, { foreignKey: 'user_id', onDelete: 'CASCADE' });
 Appointment.belongsTo(User, { foreignKey: 'user_id', onDelete: 'CASCADE' });
 
-// 6. Schedule <-> Appointment (Appointment.scheduleId 是 NOT NULL)
+// 7. Schedule <-> Appointment (Appointment.scheduleId 是 NOT NULL)
 Schedule.hasMany(Appointment, { foreignKey: 'schedule_id', onDelete: 'CASCADE' });
 Appointment.belongsTo(Schedule, { foreignKey: 'schedule_id', onDelete: 'CASCADE' });
 
-// 7. Schedule <-> AuditLog (AuditLog.scheduleId 是 NOT NULL)
+// 8. Schedule <-> AuditLog (AuditLog.scheduleId 是 NOT NULL)
 //Schedule.hasMany(AuditLog, { foreignKey: 'schedule_id', onDelete: 'CASCADE' });
 //AuditLog.belongsTo(Schedule, { foreignKey: 'schedule_id', onDelete: 'CASCADE' });
 
-// 8. User <-> AuditLog (AuditLog.adminId 是 NOT NULL)
+// 9. User <-> AuditLog (AuditLog.adminId 是 NOT NULL)
 //User.hasMany(AuditLog, { as: 'AdminLogs', foreignKey: 'admin_id', onDelete: 'CASCADE' });
 //AuditLog.belongsTo(User, { foreignKey: 'admin_id', onDelete: 'CASCADE' });
 
-// 9. Appointment <-> CallLog (CallLog.apptId 是 NOT NULL)
+// 10. Appointment <-> CallLog (CallLog.apptId 是 NOT NULL)
 Appointment.hasMany(CallLog, { foreignKey: 'appt_id', onDelete: 'CASCADE' });
 CallLog.belongsTo(Appointment, { foreignKey: 'appt_id', onDelete: 'CASCADE' });
 
-// 10. Doctor <-> CallLog (CallLog.doctorId 是 NOT NULL)
+// 11. Doctor <-> CallLog (CallLog.doctorId 是 NOT NULL)
 Doctor.hasMany(CallLog, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
 CallLog.belongsTo(Doctor, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
 
-// 11. User <-> AntiHoardingLog (AntiHoardingLog.userId 是 allowNull: true，使用 SET NULL 或省略)
+// 12. User <-> AntiHoardingLog (AntiHoardingLog.userId 是 allowNull: true，使用 SET NULL 或省略)
 User.hasMany(AntiHoardingLog, { foreignKey: 'user_id', onDelete: 'SET NULL' });
 AntiHoardingLog.belongsTo(User, { foreignKey: 'user_id', onDelete: 'SET NULL' });
 
-// 12. User <-> WaitingList (WaitingList.userId 是 NOT NULL)
+// 13. User <-> WaitingList (WaitingList.userId 是 NOT NULL)
 User.hasMany(WaitingList, { foreignKey: 'user_id', onDelete: 'CASCADE' });
 WaitingList.belongsTo(User, { foreignKey: 'user_id', onDelete: 'CASCADE' });
 
-// 13. Schedule <-> WaitingList (WaitingList.scheduleId 是 NOT NULL)
+// 14. Schedule <-> WaitingList (WaitingList.scheduleId 是 NOT NULL)
 Schedule.hasMany(WaitingList, { foreignKey: 'schedule_id', onDelete: 'CASCADE' });
 WaitingList.belongsTo(Schedule, { foreignKey: 'schedule_id', onDelete: 'CASCADE' });
 
-// 14. WaitingList <-> Appointment (可选关系)
+// 15. WaitingList <-> Appointment (可选关系)
 WaitingList.belongsTo(Appointment, { foreignKey: 'converted_to_appt_id', as: 'ConvertedAppointment' });
 
 // 导出模型，同时确保命名一致性
