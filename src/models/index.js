@@ -12,6 +12,7 @@ const auditLogModelModule = require('./AuditLog');
 const callLogModelModule = require('./CallLog');
 const antiHoardingLogModelModule = require('./AntiHoardingLog');
 const smsVerificationModelModule = require('./SmsVerification');
+const waitingListModelModule = require('./WaitingList');
 
 // 初始化并获取实际的模型实例
 const User = userModelModule.initiate(sequelize);
@@ -24,6 +25,7 @@ const AuditLog = auditLogModelModule.initiate(sequelize);
 const CallLog = callLogModelModule.initiate(sequelize);
 const AntiHoardingLog = antiHoardingLogModelModule.initiate(sequelize);
 const SmsVerification = smsVerificationModelModule.initiate(sequelize);
+const WaitingList = waitingListModelModule.initiate(sequelize);
 
 // 将createSmartLog方法附加到AuditLog模型上
 AuditLog.createSmartLog = auditLogModelModule.createSmartLog;
@@ -74,6 +76,17 @@ CallLog.belongsTo(Doctor, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
 User.hasMany(AntiHoardingLog, { foreignKey: 'user_id', onDelete: 'SET NULL' });
 AntiHoardingLog.belongsTo(User, { foreignKey: 'user_id', onDelete: 'SET NULL' });
 
+// 12. User <-> WaitingList (WaitingList.userId 是 NOT NULL)
+User.hasMany(WaitingList, { foreignKey: 'user_id', onDelete: 'CASCADE' });
+WaitingList.belongsTo(User, { foreignKey: 'user_id', onDelete: 'CASCADE' });
+
+// 13. Schedule <-> WaitingList (WaitingList.scheduleId 是 NOT NULL)
+Schedule.hasMany(WaitingList, { foreignKey: 'schedule_id', onDelete: 'CASCADE' });
+WaitingList.belongsTo(Schedule, { foreignKey: 'schedule_id', onDelete: 'CASCADE' });
+
+// 14. WaitingList <-> Appointment (可选关系)
+WaitingList.belongsTo(Appointment, { foreignKey: 'converted_to_appt_id', as: 'ConvertedAppointment' });
+
 // 导出模型，同时确保命名一致性
 module.exports = {
   sequelize,
@@ -86,5 +99,6 @@ module.exports = {
   AuditLog,
   CallLog,
   AntiHoardingLog,
-  SmsVerification
+  SmsVerification,
+  WaitingList
 };

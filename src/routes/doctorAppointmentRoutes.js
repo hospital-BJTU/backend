@@ -32,5 +32,6 @@ router.put('/appointments/:apptId/complete', doctorAppointmentController.markApp
 
 // 医生端 - 提报排班计划 (新增)
 router.post('/schedules/propose', doctorAppointmentController.proposeSchedule);
+router.put('/schedules/:scheduleId/allow-waiting', doctorAppointmentController.updateScheduleAllowWaiting);
 
 module.exports = router;

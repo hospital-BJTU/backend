@@ -40,4 +40,19 @@ router.get('/appointments/:apptId', userAppointmentController.getAppointmentDeta
 // 取消预约
 router.put('/appointments/:apptId/cancel', userAppointmentController.cancelAppointment);
 
+// 查询可候补的排班列表
+router.get('/waiting/schedules', authenticateJWT, checkBlacklist, appointmentLimiter, userAppointmentController.getAvailableWaitingSchedules);
+
+// 加入候补队列
+router.post('/waiting/join', authenticateJWT, checkBlacklist, appointmentLimiter, userAppointmentController.joinWaitingList);
+
+// 查询用户的候补列表
+router.get('/waiting/list', authenticateJWT, checkBlacklist, appointmentLimiter, userAppointmentController.getUserWaitingList);
+
+// 查询候补详情
+router.get('/waiting/:waitingId', authenticateJWT, checkBlacklist, appointmentLimiter, userAppointmentController.getWaitingDetail);
+
+// 取消候补
+router.delete('/waiting/:waitingId', authenticateJWT, checkBlacklist, appointmentLimiter, userAppointmentController.cancelWaiting);
+
 module.exports = router;
