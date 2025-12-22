@@ -34,6 +34,73 @@ function calculateEstimatedTime(scheduleDate, timeSlot, waitingCount) {
   }
 }
 
+// 处理排班余号增加时的候补转正逻辑
+exports.processWaitingListForSchedule = async function processWaitingListForSchedule(scheduleId, transaction = null) {
+  try {
+    // 检查是否有等待中的候补用户
+    const nextWaiting = await WaitingList.findOne({
+      where: {
+        scheduleId,
+        status: 'waiting'
+      },
+      order: [['waitingNumber', 'ASC']],
+      transaction
+    });
+    
+    if (nextWaiting) {
+      // 获取排班信息以确保有可用余号
+      const schedule = await Schedule.findOne({
+        where: { scheduleId },
+        attributes: ['availableCount'],
+        transaction
+      });
+      
+      if (schedule && schedule.availableCount > 0) {
+        // 更新候补状态为已确认
+        await nextWaiting.update({
+          status: 'confirmed'
+        }, { transaction });
+        
+        // 为候补用户创建新的预约记录
+        // 获取当前最大序列号
+        const maxSerialNumber = await Appointment.max('serialNumber', {
+          where: { scheduleId },
+          transaction
+        });
+        
+        const newSerialNumber = maxSerialNumber ? maxSerialNumber + 1 : 1;
+        
+        // 创建新预约
+        await Appointment.create({
+          userId: nextWaiting.userId,
+          doctorId: nextWaiting.doctorId,
+          scheduleId,
+          serialNumber: newSerialNumber,
+          status: 'pending',
+          isValid: 1
+        }, { transaction });
+        
+        // 减少排班余号数（使用原子更新SQL避免并发更新丢失问题）
+        await Schedule.sequelize.query(
+          'UPDATE tb_schedule SET available_count = available_count - 1 WHERE schedule_id = :scheduleId',
+          {
+            replacements: { scheduleId },
+            transaction,
+            type: Schedule.sequelize.QueryTypes.UPDATE
+          }
+        );
+        
+        console.log(`已将候补用户 ${nextWaiting.userId} 的预约转正，排班ID: ${scheduleId}`);
+        return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    console.error(`处理排班${scheduleId}的候补队列失败:`, error);
+    return false;
+  }
+}
+
 // 创建预约（患者端）
 exports.createAppointment = async (req, res) => {
   try {
@@ -987,54 +1054,11 @@ exports.cancelAppointment = async (req, res) => {
         }
       );
       
-      // 分配给候补队列中的下一位患者
-      const nextWaiting = await WaitingList.findOne({
-        where: {
-          scheduleId: appointment.scheduleId,
-          status: 'waiting'
-        },
-        order: [['waitingNumber', 'ASC']],
-        transaction
-      });
-      
-      if (nextWaiting) {
-        // 更新候补状态为已确认
-        await nextWaiting.update({
-          status: 'confirmed'
-        }, { transaction });
-        
-        // 为候补用户创建新的预约记录
-        // 获取当前最大序列号
-        const maxSerialNumber = await Appointment.max('serialNumber', {
-          where: { scheduleId: appointment.scheduleId },
-          transaction
-        });
-        
-        const newSerialNumber = maxSerialNumber ? maxSerialNumber + 1 : 1;
-        
-        // 创建新预约
-        await Appointment.create({
-          userId: nextWaiting.userId,
-          doctorId: appointment.doctorId,
-          scheduleId: appointment.scheduleId,
-          serialNumber: newSerialNumber,
-          status: 'pending',
-          isValid: 1
-        }, { transaction });
-        
-        // 减少排班余号数
-        await Schedule.sequelize.query(
-          'UPDATE tb_schedule SET available_count = available_count - 1 WHERE schedule_id = :scheduleId',
-          {
-            replacements: { scheduleId: appointment.scheduleId },
-            transaction,
-            type: Schedule.sequelize.QueryTypes.UPDATE
-          }
-        );
-        
-        console.log(`已将候补用户 ${nextWaiting.userId} 的预约转正`);
-      } else {
-        console.log('当前排班无等待中的候补用户');
+      // 处理候补队列转正（使用新的通用函数）
+      // 持续处理候补队列，直到没有可用余号或没有候补用户
+      let hasProcessed = true;
+      while (hasProcessed) {
+        hasProcessed = await exports.processWaitingListForSchedule(appointment.scheduleId, transaction);
       }
       
       // 提交事务
@@ -1294,7 +1318,11 @@ exports.getAvailableSchedules = async (req, res) => {
     // 构建查询条件
     const whereClause = {
       auditStatus: 'approved',
-      availableCount: { [Op.gt]: 0 } // 余号数大于0
+      // 余号数大于0 或者 余号数为0但允许候补
+      [Op.or]: [
+        { availableCount: { [Op.gt]: 0 } },
+        { availableCount: 0, allowWaiting: true }
+      ]
     };
     
     if (date) {
