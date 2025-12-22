@@ -1,4 +1,4 @@
-const { Appointment, Schedule, Doctor, Department, User, UserProfile } = require('../models');
+const { Appointment, Schedule, Doctor, Department, User, UserProfile, WaitingList } = require('../models');
 const { Op } = require('sequelize');
 const AntiHoardingLogModel = require('../models/AntiHoardingLog');
 const AntiHoardingLog = AntiHoardingLogModel.getModel();
@@ -438,6 +438,486 @@ exports.getUserAppointments = async (req, res) => {
   }
 };
 
+// 加入候补队列
+exports.joinWaitingList = async (req, res) => {
+  try {
+    console.log('=== 加入候补队列方法开始 ===');
+    console.log('请求体:', JSON.stringify(req.body));
+    console.log('用户信息:', JSON.stringify(req.user));
+    
+    // 用户登录状态检查
+    if (!req.user || (!req.user.user_id && !req.user.userId)) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
+    const { scheduleId } = req.body;
+    const userId = req.user.user_id || req.user.userId;
+    
+    // 参数验证
+    if (!scheduleId || !userId) {
+      return res.status(400).json({
+        code: 400,
+        message: '缺少必要参数',
+        data: null
+      });
+    }
+    
+    // 检查排班是否存在且已审核
+    const schedule = await Schedule.findOne({
+      where: {
+        scheduleId: scheduleId,
+        auditStatus: 'approved'
+      }
+    });
+    
+    if (!schedule) {
+      return res.status(404).json({
+        code: 404,
+        message: '排班不存在或未通过审核',
+        data: null
+      });
+    }
+
+    // 1. 检查目标号源是否已满
+    if (schedule.availableCount > 0) {
+      return res.status(400).json({
+        code: 400,
+        message: '当前号源充足，无需加入候补',
+        data: null
+      });
+    }
+
+    // 2. 验证科室/医生是否开通候补功能
+    const doctor = await Doctor.findByPk(schedule.doctorId);
+    if (!doctor) {
+      return res.status(404).json({
+        code: 404,
+        message: '医生不存在',
+        data: null
+      });
+    }
+
+    const department = await Department.findByPk(doctor.deptId);
+    if (!department) {
+      return res.status(404).json({
+        code: 404,
+        message: '科室不存在',
+        data: null
+      });
+    }
+
+    // 检查排班是否开放候补功能
+    if (!schedule.allowWaiting) {
+      return res.status(400).json({ 
+        code: 400,
+        message: '该排班未开放候补功能',
+        data: null
+      });
+    }
+
+    // 3. 检查患者条件
+    // 3.1 检查是否实名认证（身份是否核验）
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({
+        code: 404,
+        message: '用户不存在',
+        data: null
+      });
+    }
+
+    if (user.verifyStatus !== 'verified') {
+      return res.status(400).json({
+        code: 400,
+        message: '您尚未完成实名认证，无法加入候补',
+        data: null
+      });
+    }
+
+    // 3.2 检查同一科室候补申请限制（一个患者同一科室只能有一个候补）
+    const sameDeptWaitingCount = await WaitingList.count({
+      where: {
+        userId,
+        status: 'waiting'
+      },
+      include: [
+        {
+          model: Schedule,
+          attributes: [],
+          where: {
+            doctorId: {
+              [Op.in]: (await Doctor.findAll({
+                where: { deptId: doctor.deptId },
+                attributes: ['doctorId']
+              })).map(d => d.doctorId)
+            },
+            auditStatus: 'approved'
+          }
+        }
+      ]
+    });
+
+    // 设置同一科室候补申请数量限制为1个
+    const MAX_WAITING_PER_DEPT = 1;
+    if (sameDeptWaitingCount >= MAX_WAITING_PER_DEPT) {
+      return res.status(400).json({
+        code: 400,
+        message: '同一科室最多只能申请1个候补号源',
+        data: null
+      });
+    }
+    
+    // 检查用户是否已经在该排班的候补列表中（任何状态）
+    const existingWaiting = await WaitingList.findOne({
+      where: {
+        userId: userId,
+        scheduleId: scheduleId
+      }
+    });
+    
+    if (existingWaiting) {
+      // 根据不同状态返回不同的提示信息
+      if (existingWaiting.status === 'waiting') {
+        return res.status(400).json({
+          code: 400,
+          message: '您已经在该排班的候补列表中',
+          data: {
+            waitingId: existingWaiting.waitingId,
+            waitingNumber: existingWaiting.waitingNumber
+          }
+        });
+      } else {
+        // 如果是其他状态（已取消、已过期、已转正），提示用户可以重新加入
+        // 先删除旧记录
+        await existingWaiting.destroy();
+        console.log('已删除用户在该排班的旧候补记录，准备创建新记录');
+      }
+    }
+    
+    // 检查用户是否已经在该排班有有效预约
+    const existingAppointment = await Appointment.findOne({
+      where: {
+        userId: userId,
+        scheduleId: scheduleId,
+        isValid: 1,
+        status: { [Op.in]: ['pending', 'called', 'completed'] }
+      }
+    });
+    
+    if (existingAppointment) {
+      return res.status(400).json({
+        code: 400,
+        message: '您已经在该排班有有效预约，无法加入候补',
+        data: {
+          appointmentId: existingAppointment.apptId
+        }
+      });
+    }
+    
+    // 计算新的候补顺序号
+    const maxWaitingNumber = await WaitingList.max('waitingNumber', {
+      where: {
+        scheduleId: scheduleId
+      }
+    });
+    const newWaitingNumber = maxWaitingNumber ? maxWaitingNumber + 1 : 1;
+    
+    // 创建候补记录
+    const waitingRecord = await WaitingList.create({
+      userId: userId,
+      scheduleId: scheduleId,
+      waitingNumber: newWaitingNumber,
+      status: 'waiting',
+      waitingTime: new Date()
+    });
+    
+    console.log('候补记录创建成功:', waitingRecord);
+    
+    return res.status(201).json({
+      code: 201,
+      message: '成功加入候补队列',
+      data: {
+        waitingId: waitingRecord.waitingId,
+        scheduleId: waitingRecord.scheduleId,
+        waitingNumber: waitingRecord.waitingNumber,
+        waitingTime: waitingRecord.waitingTime,
+        status: waitingRecord.status
+      }
+    });
+    
+  } catch (error) {
+    console.error('加入候补队列失败:', error);
+    res.status(500).json({
+      code: 500,
+      message: '加入候补队列过程中发生错误',
+      data: null
+    });
+  }
+};
+
+// 查询用户的候补列表
+exports.getUserWaitingList = async (req, res) => {
+  try {
+    // 用户登录状态检查
+    if (!req.user || (!req.user.user_id && !req.user.userId)) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
+    const userId = req.user.user_id || req.user.userId;
+    
+    // 查询用户的所有候补记录
+    const waitingList = await WaitingList.findAll({
+      where: {
+        userId: userId
+      },
+      include: [
+        {
+          model: Schedule,
+          include: [
+            {
+              model: Doctor,
+              include: [
+                { model: Department },
+                { model: User, attributes: ['username'] }
+              ]
+            }
+          ]
+        },
+        {
+          model: Appointment,
+          as: 'ConvertedAppointment',
+          required: false
+        }
+      ],
+      order: [['waitingTime', 'DESC']]
+    });
+    
+    // 格式化返回数据
+    const formattedWaitingList = waitingList.map((waiting) => {
+      return {
+        waitingId: waiting.waitingId,
+        scheduleId: waiting.scheduleId,
+        waitingNumber: waiting.waitingNumber,
+        status: waiting.status,
+        statusDescription: {
+          waiting: '等待中',
+          converted: '已转正',
+          cancelled: '已取消',
+          expired: '已过期'
+        }[waiting.status],
+        waitingTime: waiting.waitingTime,
+        convertedAt: waiting.convertedAt,
+        convertedToAppointment: waiting.ConvertedAppointment ? {
+          appointmentId: waiting.ConvertedAppointment.apptId,
+          serialNumber: waiting.ConvertedAppointment.serialNumber
+        } : null,
+        doctorName: waiting.Schedule.Doctor.User.username,
+        doctorTitle: waiting.Schedule.Doctor.title,
+        departmentName: waiting.Schedule.Doctor.Department.deptName,
+        scheduleDate: waiting.Schedule.scheduleDate,
+        timeSlot: waiting.Schedule.timeSlot
+      };
+    });
+    
+    return res.status(200).json({
+      code: 200,
+      message: '查询成功',
+      data: {
+        waitingList: formattedWaitingList,
+        total: formattedWaitingList.length
+      }
+    });
+    
+  } catch (error) {
+    console.error('查询用户候补列表失败:', error);
+    res.status(500).json({
+      code: 500,
+      message: '查询过程中发生错误',
+      data: null
+    });
+  }
+};
+
+// 查询候补详情
+exports.getWaitingDetail = async (req, res) => {
+  try {
+    // 用户登录状态检查
+    if (!req.user || (!req.user.user_id && !req.user.userId)) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
+    const { waitingId } = req.params;
+    const userId = req.user.user_id || req.user.userId;
+    
+    // 查询候补记录
+    const waiting = await WaitingList.findOne({
+      where: {
+        waitingId: waitingId,
+        userId: userId
+      },
+      include: [
+        {
+          model: Schedule,
+          include: [
+            {
+              model: Doctor,
+              include: [
+                { model: Department },
+                { model: User, attributes: ['username'] }
+              ]
+            }
+          ]
+        },
+        {
+          model: Appointment,
+          as: 'ConvertedAppointment',
+          required: false
+        }
+      ]
+    });
+    
+    if (!waiting) {
+      return res.status(404).json({
+        code: 404,
+        message: '候补记录不存在或不属于当前用户',
+        data: null
+      });
+    }
+    
+    // 计算前面还有多少人在等待
+    const peopleAhead = await WaitingList.count({
+      where: {
+        scheduleId: waiting.scheduleId,
+        status: 'waiting',
+        waitingNumber: { [Op.lt]: waiting.waitingNumber }
+      }
+    });
+    
+    // 格式化返回数据
+    const formattedWaiting = {
+      waitingId: waiting.waitingId,
+      scheduleId: waiting.scheduleId,
+      waitingNumber: waiting.waitingNumber,
+      status: waiting.status,
+      statusDescription: {
+        waiting: '等待中',
+        converted: '已转正',
+        cancelled: '已取消',
+        expired: '已过期'
+      }[waiting.status],
+      waitingTime: waiting.waitingTime,
+      convertedAt: waiting.convertedAt,
+      convertedToAppointment: waiting.ConvertedAppointment ? {
+        appointmentId: waiting.ConvertedAppointment.apptId,
+        serialNumber: waiting.ConvertedAppointment.serialNumber
+      } : null,
+      doctorName: waiting.Schedule.Doctor.User.username,
+      doctorTitle: waiting.Schedule.Doctor.title,
+      departmentName: waiting.Schedule.Doctor.Department.deptName,
+      scheduleDate: waiting.Schedule.scheduleDate,
+      timeSlot: waiting.Schedule.timeSlot,
+      peopleAhead: peopleAhead
+    };
+    
+    return res.status(200).json({
+      code: 200,
+      message: '查询成功',
+      data: formattedWaiting
+    });
+    
+  } catch (error) {
+    console.error('查询候补详情失败:', error);
+    res.status(500).json({
+      code: 500,
+      message: '查询过程中发生错误',
+      data: null
+    });
+  }
+};
+
+// 取消候补
+exports.cancelWaiting = async (req, res) => {
+  try {
+    // 用户登录状态检查
+    if (!req.user || (!req.user.user_id && !req.user.userId)) {
+      return res.status(401).json({
+        code: 401,
+        message: '用户未登录或登录状态已过期',
+        data: null
+      });
+    }
+    
+    const { waitingId } = req.params;
+    const userId = req.user.user_id || req.user.userId;
+    
+    // 查询候补记录
+    const waiting = await WaitingList.findOne({
+      where: {
+        waitingId: waitingId,
+        userId: userId
+      }
+    });
+    
+    if (!waiting) {
+      return res.status(404).json({
+        code: 404,
+        message: '候补记录不存在或不属于当前用户',
+        data: null
+      });
+    }
+    
+    // 检查候补状态
+    if (waiting.status !== 'waiting') {
+      return res.status(400).json({
+        code: 400,
+        message: `该候补记录当前状态为"${{
+          waiting: '等待中',
+          converted: '已转正',
+          cancelled: '已取消',
+          expired: '已过期'
+        }[waiting.status]}"，无法取消`,
+        data: {
+          status: waiting.status
+        }
+      });
+    }
+    
+    // 更新候补状态为已取消
+    await waiting.update({
+      status: 'cancelled'
+    });
+    
+    return res.status(200).json({
+      code: 200,
+      message: '取消候补成功',
+      data: {
+        waitingId: waiting.waitingId,
+        status: 'cancelled'
+      }
+    });
+    
+  } catch (error) {
+    console.error('取消候补失败:', error);
+    res.status(500).json({
+      code: 500,
+      message: '取消候补过程中发生错误',
+      data: null
+    });
+  }
+};
+
 // 取消预约
 exports.cancelAppointment = async (req, res) => {
   try {
@@ -506,6 +986,56 @@ exports.cancelAppointment = async (req, res) => {
           type: Schedule.sequelize.QueryTypes.UPDATE
         }
       );
+      
+      // 分配给候补队列中的下一位患者
+      const nextWaiting = await WaitingList.findOne({
+        where: {
+          scheduleId: appointment.scheduleId,
+          status: 'waiting'
+        },
+        order: [['waitingNumber', 'ASC']],
+        transaction
+      });
+      
+      if (nextWaiting) {
+        // 更新候补状态为已确认
+        await nextWaiting.update({
+          status: 'confirmed'
+        }, { transaction });
+        
+        // 为候补用户创建新的预约记录
+        // 获取当前最大序列号
+        const maxSerialNumber = await Appointment.max('serialNumber', {
+          where: { scheduleId: appointment.scheduleId },
+          transaction
+        });
+        
+        const newSerialNumber = maxSerialNumber ? maxSerialNumber + 1 : 1;
+        
+        // 创建新预约
+        await Appointment.create({
+          userId: nextWaiting.userId,
+          doctorId: appointment.doctorId,
+          scheduleId: appointment.scheduleId,
+          serialNumber: newSerialNumber,
+          status: 'pending',
+          isValid: 1
+        }, { transaction });
+        
+        // 减少排班余号数
+        await Schedule.sequelize.query(
+          'UPDATE tb_schedule SET available_count = available_count - 1 WHERE schedule_id = :scheduleId',
+          {
+            replacements: { scheduleId: appointment.scheduleId },
+            transaction,
+            type: Schedule.sequelize.QueryTypes.UPDATE
+          }
+        );
+        
+        console.log(`已将候补用户 ${nextWaiting.userId} 的预约转正`);
+      } else {
+        console.log('当前排班无等待中的候补用户');
+      }
       
       // 提交事务
       await transaction.commit();
@@ -660,6 +1190,94 @@ exports.getAppointmentDetail = async (req, res) => {
     
   } catch (error) {
     console.error('查询预约详情失败:', error);
+    res.status(500).json({
+      code: 500,
+      message: '查询过程中发生错误',
+      data: null
+    });
+  }
+};
+
+// 查询可候补的排班列表（患者端）
+exports.getAvailableWaitingSchedules = async (req, res) => {
+  try {
+    const { deptId, date, doctorId } = req.query;
+    
+    // 构建查询条件
+    const whereClause = {
+      auditStatus: 'approved'
+    };
+    
+    if (date) {
+      whereClause.scheduleDate = date;
+    }
+    
+    if (doctorId) {
+      whereClause.doctorId = doctorId;
+    }
+    
+    // 查询排班，包括余号为0的排班（可以候补）
+    const schedules = await Schedule.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: Doctor,
+          include: [
+            { 
+              model: Department 
+            },
+            { 
+              model: User, 
+              attributes: ['username'] 
+            }
+          ],
+          // 通过科室ID过滤医生
+          where: deptId ? { deptId: deptId } : {} 
+        }
+      ],
+      order: [
+        ['scheduleDate', 'ASC'],
+        ['timeSlot', 'ASC']
+      ]
+    });
+    
+    // 格式化返回数据，包含当前候补人数
+    const formattedSchedules = await Promise.all(schedules.map(async (schedule) => {
+      // 计算当前候补人数
+      const waitingCount = await WaitingList.count({
+        where: {
+          scheduleId: schedule.scheduleId,
+          status: 'waiting'
+        }
+      });
+      
+      return {
+        scheduleId: schedule.scheduleId,
+        doctorId: schedule.Doctor.doctorId,
+        doctorName: schedule.Doctor.User.username,
+        doctorTitle: schedule.Doctor.title,
+        departmentName: schedule.Doctor.Department.deptName,
+        scheduleDate: schedule.scheduleDate,
+        timeSlot: schedule.timeSlot,
+        availableCount: schedule.availableCount,
+        maxCount: schedule.maxCount,
+        waitingCount: waitingCount,
+        canAppoint: schedule.availableCount > 0,
+        canWait: true // 所有已审核的排班都可以候补
+      };
+    }));
+    
+    return res.status(200).json({
+      code: 200,
+      message: '查询成功',
+      data: {
+        schedules: formattedSchedules,
+        total: formattedSchedules.length
+      }
+    });
+    
+  } catch (error) {
+    console.error('查询可候补排班失败:', error);
     res.status(500).json({
       code: 500,
       message: '查询过程中发生错误',

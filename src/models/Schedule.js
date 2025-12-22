@@ -53,6 +53,13 @@ const ScheduleModel = {
         allowNull: false,
         defaultValue: 'pending',
         comment: '审核状态: pending(待审核), approved(已通过), rejected(已拒绝)'
+      },
+      allowWaiting: {
+        field: 'allow_waiting',
+        type: DataTypes.BOOLEAN,
+        defaultValue: true,
+        allowNull: false,
+        comment: '是否开放候补功能，默认为true'
       }
     }, {
       tableName: 'tb_schedule',
