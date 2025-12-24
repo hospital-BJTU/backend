@@ -25,6 +25,8 @@ const { connectRedis } = require('./config/redis');
 const AppointmentExpiryChecker = require('./utils/appointmentExpiryChecker');
 // 导入候补队列自动处理工具
 const WaitingListProcessor = require('./utils/waitingListProcessor');
+// 导入排班过期检测工具
+const ScheduleExpiryChecker = require('./utils/scheduleExpiryChecker');
 
 // 从环境变量获取端口
 const PORT = process.env.PORT;
@@ -102,6 +104,8 @@ const startServer = async () => {
     AppointmentExpiryChecker.init();
     // 初始化候补队列自动处理
     WaitingListProcessor.init();
+    // 初始化排班过期检测
+    await ScheduleExpiryChecker.init();
     
     app.listen(PORT, () => {
       console.log(`服务器运行在 http://localhost:${PORT}`);

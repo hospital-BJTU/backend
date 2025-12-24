@@ -16,14 +16,14 @@ class WaitingListProcessor {
   static init() {
     console.log('正在初始化候补队列自动处理...');
     
-    // 每10秒执行一次候补队列处理任务（临时设置）
+    // 每30秒执行一次候补队列处理任务
     // 格式：秒 分 时 日 月 周
-    cron.schedule('*/10 * * * * *', async () => {
+    cron.schedule('*/30 * * * * *', async () => {
       console.log('开始执行候补队列自动处理任务...');
       await this.processWaitingLists();
     });
     
-    console.log('候补队列自动处理已初始化，每10秒执行一次（临时设置）');
+    console.log('候补队列自动处理已初始化，每五秒执行一次');
   }
   
   /**
@@ -31,57 +31,68 @@ class WaitingListProcessor {
    */
   static async processWaitingLists() {
     try {
-      const today = new Date().toISOString().split('T')[0];
-      
-      // 1. 先从候补表中查询所有等待中的记录，获取对应的scheduleId
+      // 1. 获取本地日期和时间
+      const now = new Date();
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const currentTime = now.toTimeString().slice(0, 5); // "HH:MM"
+
+      // 2. 找到所有有候补记录的排班ID
       const waitingRecords = await WaitingList.findAll({
-        where: {
-          status: 'waiting'
-        },
+        where: { status: 'waiting' },
         attributes: ['scheduleId'],
-        group: ['scheduleId'] // 按scheduleId分组，避免重复处理
+        group: ['scheduleId']
       });
-      
+
       if (waitingRecords.length === 0) {
         console.log('没有等待中的候补记录，无需处理');
         return;
       }
-      
-      // 提取所有有等待记录的排班ID
-      const scheduleIds = waitingRecords.map(record => record.scheduleId);
-      
-      console.log(`找到 ${scheduleIds.length} 个排班有等待中的候补用户`);
-      
-      // 2. 查询这些排班中有余号且符合条件的排班
-      const availableSchedules = await Schedule.findAll({
-        where: {
-          scheduleId: { [Op.in]: scheduleIds }, // 只查询有候补用户的排班
-          scheduleDate: { [Op.gte]: today }, // 只处理今天及以后的排班
-          availableCount: { [Op.gt]: 0 }, // 有余号
-          allowWaiting: 1, // 开启了候补功能
-          auditStatus: 'approved' // 已批准的排班
-        },
-        attributes: ['scheduleId', 'availableCount']
-      });
-      
-      console.log(`其中 ${availableSchedules.length} 个排班有余号，需要处理候补队列`);
-      
-      // 3. 处理每个有余号的排班的候补队列
-      const processedResults = await Promise.all(availableSchedules.map(async (schedule) => {
-        const { scheduleId, availableCount } = schedule;
+
+      console.log(`找到 ${waitingRecords.length} 个排班有等待中的候补用户`);
+
+      for (const record of waitingRecords) {
+        const scheduleId = record.scheduleId;
+        const schedule = await Schedule.findByPk(scheduleId);
+
+        if (!schedule) continue;
+
+        // --- 核心拦截：检查该排班是否已经过期 ---
+        const startTime = schedule.timeSlot.split('-')[0];
+        const isExpired = schedule.scheduleDate < today || (schedule.scheduleDate === today && currentTime >= startTime);
+
+        if (isExpired) {
+          // 如果已过期，批量将该排班的候补设为已过期，不再转正
+          await WaitingList.update(
+            { status: 'expired' },
+            { where: { scheduleId, status: 'waiting' } }
+          );
+          console.log(`[候补清理] 排班 ${scheduleId} 已过期，所有候补记录已作废`);
+          continue;
+        }
+
+        // --- 调试日志：检查转正条件 --- 
+        console.log(`[转正条件检查] 排班 ${scheduleId}：`);
+        console.log(`  - 余号数: ${schedule.availableCount}`);
+        console.log(`  - 是否允许候补: ${schedule.allowWaiting}`);
+        console.log(`  - 审核状态: ${schedule.auditStatus}`);
         
-        // 查询该排班的详细信息，获取scheduleDate
-      const scheduleDetails = await Schedule.findByPk(scheduleId, {
-        attributes: ['scheduleDate']
-      });
-      
-      // 处理该排班的候补队列
-      return await this.processWaitingListForSchedule(scheduleId, availableCount, scheduleDetails.scheduleDate);
-      }));
-      
-      // 统计结果
-      const totalProcessed = processedResults.reduce((sum, count) => sum + count, 0);
-      console.log(`候补队列自动处理任务完成，共转正 ${totalProcessed} 个候补用户`);
+        // --- 如果未过期，且有余号，执行转正逻辑 ---
+        if (schedule.availableCount > 0 && schedule.allowWaiting && schedule.auditStatus === 'approved') {
+          console.log(`[转正执行] 排班 ${scheduleId} 满足转正条件，执行转正逻辑`);
+          await this.processWaitingListForSchedule(scheduleId, schedule.availableCount, schedule.scheduleDate);
+        } else {
+          console.log(`[转正跳过] 排班 ${scheduleId} 不满足转正条件`);
+          if (schedule.availableCount <= 0) {
+            console.log(`    - 原因：余号数不足（余号：${schedule.availableCount}）`);
+          }
+          if (schedule.allowWaiting !== 1) {
+            console.log(`    - 原因：不允许候补（allowWaiting：${schedule.allowWaiting}）`);
+          }
+          if (schedule.auditStatus !== 'approved') {
+            console.log(`    - 原因：排班未通过审核（审核状态：${schedule.auditStatus}）`);
+          }
+        }
+      }
       
     } catch (error) {
       console.error('候补队列自动处理失败:', error);
@@ -103,22 +114,19 @@ class WaitingListProcessor {
       const transaction = await sequelize.transaction();
       
       try {
-        // 1. 查询该排班的等待中候补用户，按加入时间排序（先到先得）
+        // 1. 获取排在前面的候补用户
         const waitingUsers = await WaitingList.findAll({
-          where: {
-            scheduleId: scheduleId,
-            status: 'waiting'
-          },
-          order: [['waitingTime', 'ASC']], // 使用正确的字段名waitingTime
-          limit: availableCount, // 最多处理availableCount个用户
+          where: { scheduleId, status: 'waiting' },
+          order: [['waitingTime', 'ASC']], // 按加入时间排序，先到先得
+          limit: availableCount,
           transaction
         });
-        
+
         if (waitingUsers.length === 0) {
           await transaction.commit();
           return 0;
         }
-        
+
         console.log(`排班 ${scheduleId} 有 ${waitingUsers.length} 个等待中的候补用户，将处理 ${Math.min(waitingUsers.length, availableCount)} 个`);
         
         // 2. 获取当前最大的序列号（使用原始SQL查询确保准确性）
@@ -133,10 +141,9 @@ class WaitingListProcessor {
         let nextSerialNumber = (results[0]?.maxSerialNumber || 0) + 1;
         
         console.log(`排班 ${scheduleId} 的当前最大序列号为 ${results[0]?.maxSerialNumber || 0}，下一个序列号为 ${nextSerialNumber}`);
-        
-        // 3. 处理每个候补用户
+
         for (const waitingUser of waitingUsers) {
-          // 创建新的预约记录
+          // 1. 创建正式预约
           const appointment = await Appointment.create({
             userId: waitingUser.userId,
             scheduleId: scheduleId,
@@ -146,26 +153,26 @@ class WaitingListProcessor {
             checkInStatus: 'not_checked',
             isValid: 1
           }, { transaction });
-          
-          // 更新候补状态为已确认
+
+          // 2. 更新候补状态
           await waitingUser.update({
-            status: 'converted', // 使用模型中定义的正确状态值
+            status: 'converted',
             convertedAt: new Date(),
             convertedToApptId: appointment.apptId // 记录转成的预约ID
           }, { transaction });
-          
-          // 原子性减少余号数
-          await Schedule.update(
-            { availableCount: sequelize.literal('available_count - 1') },
-            { 
-              where: { scheduleId: scheduleId, availableCount: { [Op.gt]: 0 } },
-              transaction 
-            }
-          );
+
+          // 3. 扣减余号
+          await Schedule.decrement('availableCount', {
+            where: { scheduleId },
+            transaction
+          });
+
+          // [重要] 在此处可以调用微信订阅消息接口，通知用户：
+          // "您好，您的候补申请已转正成功，请准时就诊。"
           
           processedCount++;
         }
-        
+
         await transaction.commit();
         console.log(`排班 ${scheduleId} 成功处理 ${processedCount} 个候补用户`);
         

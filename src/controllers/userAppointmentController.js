@@ -3,6 +3,15 @@ const { Op } = require('sequelize');
 const AntiHoardingLogModel = require('../models/AntiHoardingLog');
 const AntiHoardingLog = AntiHoardingLogModel.getModel();
 
+// 获取北京时间本地日期 (YYYY-MM-DD)
+const getLocalToday = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 // 获取状态描述的辅助函数
 function getStatusDescription(status) {
   const statusMap = {
@@ -193,11 +202,21 @@ exports.createAppointment = async (req, res) => {
     });
 
     if (existingAppointment) {
-      return res.status(400).json({
-        code: 400,
-        message: '您已经在该排班下有预约记录，请不要重复预约',
-        data: null
-      });
+      // 如果预约状态为已取消，返回特殊提示
+      if (existingAppointment.status === 'cancelled') {
+        return res.status(400).json({
+          code: 400,
+          message: '您已经取消过这个预约，不能再次预约',
+          data: null
+        });
+      } else {
+        // 其他状态的预约，返回通用提示
+        return res.status(400).json({
+          code: 400,
+          message: '您已经在该排班下有预约记录，请不要重复预约',
+          data: null
+        });
+      }
     }
 
     // 开始事务
@@ -218,6 +237,34 @@ exports.createAppointment = async (req, res) => {
           message: '该排班不可用或号源已用完',
           data: null
         });
+      }
+      
+      // 实时时间比对 - 检查是否可以预约
+      const today = getLocalToday();
+      const now = new Date();
+      const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      
+      // 强制转换日期格式对比
+      const scheduleDateStr = schedule.scheduleDate instanceof Date 
+        ? `${schedule.scheduleDate.getFullYear()}-${String(schedule.scheduleDate.getMonth() + 1).padStart(2, '0')}-${String(schedule.scheduleDate.getDate()).padStart(2, '0')}`
+        : schedule.scheduleDate;
+      
+      // 1. 拦截过期日期
+      if (scheduleDateStr < today) {
+        if (transaction) await transaction.rollback();
+        return res.status(400).json({ code: 400, message: '不能预约过去日期的号源' });
+      }
+      
+      // 2. 核心拦截：如果是今天，必须检查当前时间是否已过开始时间
+      if (scheduleDateStr === today) {
+        const startTime = schedule.timeSlot.split('-')[0]; // 从 "09:00-10:00" 提取 "09:00"
+        if (currentTime >= startTime) {
+          if (transaction) await transaction.rollback();
+          return res.status(400).json({ 
+            code: 400, 
+            message: `该时段(${schedule.timeSlot})预约已截止，请预约其他时段` 
+          });
+        }
       }
       
       // 使用SELECT MAX(serial_number) FOR UPDATE来确保并发安全的序列号计算
@@ -548,6 +595,29 @@ exports.joinWaitingList = async (req, res) => {
         data: null
       });
     }
+    
+    // 时间比对 - 检查是否可以加入候补
+    const today = getLocalToday();
+    const now = new Date();
+    const currentTime = now.toTimeString().slice(0, 5); // "HH:MM"
+    
+    // 将scheduleDate转换为字符串格式以确保准确比较
+    const scheduleDateStr = schedule.scheduleDate instanceof Date 
+      ? schedule.scheduleDate.toISOString().split('T')[0] 
+      : schedule.scheduleDate;
+    
+    // 1. 拦截日期
+    if (scheduleDateStr < today) {
+      return res.status(400).json({ code: 400, message: '预约日期已过期' });
+    }
+    
+    // 2. 拦截当天已过时的时段
+    if (scheduleDateStr === today) {
+      const startTime = schedule.timeSlot.split('-')[0];
+      if (currentTime >= startTime) {
+        return res.status(400).json({ code: 400, message: '该时段已过，无法加入候补，请选择其他时段' });
+      }
+    }
 
     // 1. 检查目标号源是否已满
     if (schedule.availableCount > 0) {
@@ -582,6 +652,25 @@ exports.joinWaitingList = async (req, res) => {
       return res.status(400).json({ 
         code: 400,
         message: '该排班未开放候补功能',
+        data: null
+      });
+    }
+    
+    // 检查候补队列是否已满
+    const currentWaitingCount = await WaitingList.count({
+      where: {
+        scheduleId: scheduleId,
+        status: 'waiting'
+      }
+    });
+    
+    // 获取候补名额限制，默认为2
+      const waitingLimit = schedule.waitingListLimit || 2;
+    
+    if (currentWaitingCount >= waitingLimit) {
+      return res.status(400).json({ 
+        code: 400,
+        message: `该排班的候补队列已满，候补失败`,
         data: null
       });
     }
@@ -1286,6 +1375,7 @@ exports.getAvailableWaitingSchedules = async (req, res) => {
         availableCount: schedule.availableCount,
         maxCount: schedule.maxCount,
         waitingCount: waitingCount,
+        waitingListLimit: schedule.waitingListLimit || 2, // 显示候补名额限制，默认为2
         canAppoint: schedule.availableCount > 0,
         canWait: true // 所有已审核的排班都可以候补
       };
@@ -1448,8 +1538,8 @@ exports.verifySignIn = async (req, res) => {
     
     const userId = userProfile.userId;
     
-    // 获取当前日期（YYYY-MM-DD格式）
-    const today = new Date().toISOString().split('T')[0];
+    // 获取当前日期（YYYY-MM-DD格式）- 使用统一的getLocalToday函数
+    const today = getLocalToday();
     
     // 查找今天的未签到预约
     const appointment = await Appointment.findOne({
@@ -1475,6 +1565,31 @@ exports.verifySignIn = async (req, res) => {
       return res.status(404).json({
         code: 404,
         message: '未找到今天的有效预约或已完成签到',
+        data: null
+      });
+    }
+    
+    // 增加时间窗口限制：只允许在预约时段开始前30分钟内签到
+    const startTimeStr = appointment.Schedule.timeSlot.split('-')[0];
+    const [startHour, startMinute] = startTimeStr.split(':').map(Number);
+    
+    // 创建预约开始时间的Date对象
+    const startTime = new Date(now);
+    startTime.setHours(startHour, startMinute, 0, 0);
+    
+    // 创建允许签到的开始时间（预约开始前30分钟）
+    const checkInStartTime = new Date(startTime);
+    checkInStartTime.setMinutes(checkInStartTime.getMinutes() - 30);
+    
+    // 创建允许签到的结束时间（预约开始后60分钟）
+    const checkInEndTime = new Date(startTime);
+    checkInEndTime.setMinutes(checkInEndTime.getMinutes() + 60);
+    
+    // 检查当前时间是否在允许签到的时间窗口内
+    if (now < checkInStartTime || now > checkInEndTime) {
+      return res.status(400).json({
+        code: 400,
+        message: `签到时间窗口为预约开始前30分钟至开始后60分钟内（当前预约时间段：${appointment.Schedule.timeSlot}）`,
         data: null
       });
     }

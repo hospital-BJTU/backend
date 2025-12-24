@@ -424,6 +424,52 @@ async function fixScheduleTableAllowWaiting() {
   }
 }
 
+// 修复tb_schedule表的函数，添加waiting_list_limit字段
+async function fixScheduleTableWaitingLimit() {
+  try {
+    logInfo('开始修复tb_schedule表的waiting_list_limit字段...');
+    
+    // 检查表是否存在
+    const [tables] = await sequelize.query(
+      "SHOW TABLES LIKE 'tb_schedule';"
+    );
+    
+    if (tables.length === 0) {
+      logWarning('tb_schedule表不存在，无法修复');
+      return false;
+    }
+    
+    // 检查waiting_list_limit字段是否已存在
+    const [columns] = await sequelize.query(
+      "SHOW COLUMNS FROM tb_schedule WHERE Field = 'waiting_list_limit';"
+    );
+    
+    if (columns.length > 0) {
+      logInfo('waiting_list_limit字段已存在于tb_schedule表中');
+      // 更新现有记录的waiting_list_limit字段为默认值2
+      await sequelize.query(`
+        UPDATE tb_schedule 
+        SET waiting_list_limit = COALESCE(waiting_list_limit, 2);
+      `);
+      logInfo('已将所有现有排班的waiting_list_limit字段更新为默认值2');
+    } else {
+      logInfo('waiting_list_limit字段不存在，将添加到tb_schedule表中');
+      // 添加waiting_list_limit字段
+      await sequelize.query(`
+        ALTER TABLE tb_schedule 
+        ADD COLUMN waiting_list_limit INT NOT NULL DEFAULT 2 COMMENT '候补队列名额限制，默认为2个';
+      `);
+      logSuccess('waiting_list_limit字段添加成功');
+    }
+    
+    logSuccess('tb_schedule表的waiting_list_limit字段修复完成！');
+    return true;
+  } catch (error) {
+    logError('修复tb_schedule表时出错: ' + error.message);
+    return false;
+  }
+}
+
 // 修复tb_anti_hoarding_log表的函数
 async function fixAntiHoardingLogTable() {
   try {
@@ -662,6 +708,11 @@ async function runAllFixes() {
   
   console.log('='.repeat(60));
   
+  const scheduleWaitingLimitResult = await fixScheduleTableWaitingLimit();
+  success = success && scheduleWaitingLimitResult;
+  
+  console.log('='.repeat(60));
+  
   if (success) {
     logSuccess('所有数据库修复操作已成功完成！');
   } else {
@@ -685,6 +736,7 @@ function showHelp() {
   console.log('  --anti-hoarding, -o仅修复tb_anti_hoarding_log表');
   console.log('  --waiting-list, -w 仅创建/修复tb_waiting_list表');
   console.log('  --allow-waiting, -t 仅添加allow_waiting字段到排班级别');
+  console.log('  --waiting-limit, -m 仅添加waiting_list_limit字段到排班级别');
   console.log('  --randomize-slots, -r 随机化现有号源的时间段');
   console.log('  --help, -h         显示此帮助信息');
   console.log('');
@@ -723,6 +775,8 @@ async function main() {
         operation = 'randomize-slots';
       } else if (arg === '--allow-waiting' || arg === '-t') {
         operation = 'allow-waiting';
+      } else if (arg === '--waiting-limit' || arg === '-m') {
+        operation = 'waiting-limit';
       } else if (arg === '--all' || arg === '-a') {
         operation = 'all';
       } else {
@@ -762,6 +816,9 @@ async function main() {
       case 'allow-waiting':
         success = await fixScheduleTableAllowWaiting();
         break;
+      case 'waiting-limit':
+        success = await fixScheduleTableWaitingLimit();
+        break;
       case 'all':
       default:
         success = await runAllFixes();
@@ -798,9 +855,11 @@ module.exports = {
   fixAuditLogTable,
   fixAntiHoardingLogTable,
   fixWaitingListTable,
+  fixScheduleTableAllowWaiting,
+  fixScheduleTableWaitingLimit,
   runAllFixes,
   randomizeTimeSlots
-};
+}
 
 // 随机化现有号源的时间段
 async function randomizeTimeSlots() {

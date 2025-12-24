@@ -127,8 +127,15 @@ exports.createUser = async (req, res) => {
 // 用户登录（支持用户名密码登录和微信登录）
 exports.loginUser = async (req, res) => {
   try {
+    console.log('=== 登录请求开始 ===');
+    console.log('请求方法:', req.method);
+    console.log('请求路径:', req.path);
+    console.log('请求头:', req.headers);
+    console.log('请求体:', req.body);
+    
     // 请求体存在性检测
     if (!req.body) {
+      console.log('请求体为空');
       return res.status(400).json({
         code: 400,
         message: '请求体不能为空',
@@ -137,6 +144,7 @@ exports.loginUser = async (req, res) => {
     }
     
     const { username, password, wxCode } = req.body;
+    console.log('登录参数:', { username, password: password ? '******' : undefined, wxCode });
     
     // 微信登录逻辑
     if (wxCode) {
@@ -251,6 +259,7 @@ exports.loginUser = async (req, res) => {
 
     // 用户名密码登录逻辑
     if (!username || !password) {
+      console.log('用户名或密码为空');
       return res.status(400).json({
         code: 400,
         message: '请输入用户名和密码',
@@ -259,9 +268,13 @@ exports.loginUser = async (req, res) => {
     }
     
     // 查找用户
+    console.log('正在查找用户:', username);
     const user = await User.findOne({ where: { username } });
     
+    console.log('用户查找结果:', user ? JSON.stringify(user) : '用户不存在');
+    
     if (!user) {
+      console.log('用户不存在:', username);
       return res.status(401).json({
         code: 401,
         message: '用户名或密码错误',
@@ -274,12 +287,15 @@ exports.loginUser = async (req, res) => {
     
     try {
       // 只使用bcrypt验证密码
+      console.log('正在验证密码');
       isPasswordValid = await bcrypt.compare(password, user.password);
+      console.log('密码验证结果:', isPasswordValid);
     } catch (error) {
       console.error('密码验证失败:', error);
     }
     
     if (!isPasswordValid) {
+      console.log('密码验证失败');
       return res.status(401).json({
         code: 401,
         message: '用户名或密码错误',
@@ -413,23 +429,41 @@ exports.verifyUser = async (req, res) => {
       });
     }
     
-    // 查找用户详细信息
-    const userProfile = await UserProfile.findOne({ where: { userId: user_id } });
+    // 验证身份信息的逻辑可以在这里扩展
+    // 例如调用第三方身份验证服务、与数据库中存储的其他用户信息比对等
+    console.log('验证身份信息:', JSON.stringify({ realName, idCard }));
     
-    if (!userProfile) {
-      return res.status(404).json({
-        code: 404,
-        message: '用户详细信息不存在，请先完善个人信息',
+    // 对于首次身份核验，直接使用用户输入的信息
+    // 如果需要更严格的验证，可以在此处添加第三方验证服务的调用
+    const matchedData = { realName, idCard };
+    
+    // 【新增】检查该身份证是否已经被其他用户绑定
+    const existingProfile = await UserProfile.findOne({ where: { idCard } });
+    if (existingProfile) {
+      return res.status(409).json({
+        code: 409,
+        message: '该身份证号码已被其他账号绑定',
         data: null
       });
     }
     
-    // 验证身份信息是否匹配
-    if (userProfile.realName !== realName || userProfile.idCard !== idCard) {
-      return res.status(401).json({
-        code: 401,
-        message: '身份证号码或姓名与注册信息不匹配',
-        data: null
+    // 查找或创建用户详细信息
+    let userProfile = await UserProfile.findOne({ where: { userId: user_id } });
+    
+    if (userProfile) {
+      // 更新现有用户信息
+      await userProfile.update({
+        realName: matchedData.realName,
+        idCard: matchedData.idCard,
+        updatedAt: new Date()
+      });
+    } else {
+      // 创建新的用户信息记录
+      userProfile = await UserProfile.create({
+        userId: user_id,
+        realName: matchedData.realName,
+        idCard: matchedData.idCard,
+        updatedAt: new Date()
       });
     }
     
@@ -443,7 +477,9 @@ exports.verifyUser = async (req, res) => {
       code: 200,
       message: '身份核验成功！',
       data: {
-        verifyStatus: 'verified'
+        verifyStatus: 'verified',
+        realName: matchedData.realName,
+        idCard: matchedData.idCard
       }
     });
   } catch (error) {
