@@ -20,12 +20,6 @@ const ScheduleModel = {
         allowNull: false,
         comment: '关联 tb_doctor 的ID，外键'
       },
-      deptId: {
-        field: 'dept_id',
-        type: DataTypes.INTEGER,
-        allowNull: false,
-        comment: '关联 tb_department 的ID，外键'
-      },
       scheduleDate: {
         field: 'schedule_date',
         type: DataTypes.DATEONLY,
@@ -66,6 +60,13 @@ const ScheduleModel = {
         defaultValue: true,
         allowNull: false,
         comment: '是否开放候补功能，默认为true'
+      },
+      waitingListLimit: {
+        field: 'waiting_list_limit',
+        type: DataTypes.INTEGER,
+        defaultValue: 2,
+        allowNull: true,
+        comment: '候补队列名额限制，默认为2个'
       }
     }, {
       tableName: 'tb_schedule',

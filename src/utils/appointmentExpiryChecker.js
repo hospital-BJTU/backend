@@ -31,7 +31,8 @@ class AppointmentExpiryChecker {
    */
   static async checkExpiredAppointments() {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      // 使用北京时间获取当前日期
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }); // 确保格式为 YYYY-MM-DD
       
       // 1. 查找所有过期的预约（预约日期小于今天）
       const expiredAppointments = await Appointment.findAll({

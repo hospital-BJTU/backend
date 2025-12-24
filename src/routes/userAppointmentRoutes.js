@@ -22,6 +22,9 @@ router.get('/appointments/doctors', userAppointmentController.getDoctorsByDept);
 // 查询可预约的排班列表 - 不需要认证，用于前端展示可选的排班时间
 router.get('/available-schedules', userAppointmentController.getAvailableSchedules);
 
+// 支持旧的API路径，兼容前端调用
+router.get('/appointments/schedules', userAppointmentController.getAvailableSchedules);
+
 // 签到验证接口 - 不需要认证，添加限流措施
 router.post('/verify-sign-in', signInLimiter, userAppointmentController.verifySignIn);
 

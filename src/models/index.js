@@ -44,7 +44,7 @@ Doctor.belongsTo(User, { foreignKey: 'user_id', onDelete: 'CASCADE' });
 Department.hasMany(Doctor, { foreignKey: 'dept_id', onDelete: 'CASCADE' });
 Doctor.belongsTo(Department, { foreignKey: 'dept_id', onDelete: 'CASCADE' });
 
-// 4. Doctor <-> Schedule (Schedule.doctorId 是 NOT NULL) 👈 解决本次报错
+// 4. Doctor <-> Schedule (Schedule.doctorId 是 NOT NULL)
 Doctor.hasMany(Schedule, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
 Schedule.belongsTo(Doctor, { foreignKey: 'doctor_id', onDelete: 'CASCADE' });
 

@@ -1178,9 +1178,22 @@ exports.updateScheduleAllowWaiting = async (req, res) => {
   }
 };
 
-// 医生端：提报排班计划 (新增 - 包含最大人数校验)
-exports.proposeSchedule = async (req, res) => {
+// 医生端：更新排班候补名额限制
+exports.updateScheduleWaitingLimit = async (req, res) => {
   try {
+    // 参数空值检测
+    const { scheduleId } = req.params;
+    if (!scheduleId) {
+      return res.status(400).json({ code: 400, message: '缺少必要参数：scheduleId' });
+    }
+    
+    // 确保req.body存在
+    if (!req.body) {
+      return res.status(400).json({ code: 400, message: '请求体不能为空' });
+    }
+    
+    const { waitingListLimit } = req.body;
+    
     // 用户信息空值检测
     const userInfo = req.user;
     if (!userInfo) {
@@ -1191,48 +1204,117 @@ exports.proposeSchedule = async (req, res) => {
     if (!userId || !role) {
       return res.status(401).json({ code: 401, message: '用户信息不完整' });
     }
-    
-    // 确保req.body存在
-    if (!req.body) {
-      return res.status(400).json({ code: 400, message: '请求体不能为空' });
-    }
-    
-    // maxCount 可能是 null 或未定义，需要处理
-    const { scheduleDate, timeSlot, maxCount: inputMaxCount } = req.body; 
 
     const transaction = await Schedule.sequelize.transaction();
     try {
       // 1. 角色校验
       if (role !== 'doctor') {
-      return res.status(403).json({ code: 403, message: '无权限：仅医生可提报排班' });
-    }
+        await transaction.rollback();
+        return res.status(403).json({ code: 403, message: '无权限：仅医生可操作排班' });
+      }
 
-    // 2. 获取 doctorId 
-    const doctor = await Doctor.findOne({ where: { userId: userId } });
-    if (!doctor) {
-      return res.status(403).json({ code: 403, message: '医生信息不存在或未绑定账号' });
-    }
-    const doctorId = doctor.doctorId; 
+      // 2. 获取 doctorId 
+      const doctor = await Doctor.findOne({ where: { userId: userId } });
+      if (!doctor) {
+        await transaction.rollback();
+        return res.status(403).json({ code: 403, message: '医生信息不存在或未绑定账号' });
+      }
+      const doctorId = doctor.doctorId;
 
-    // 3. 参数验证与最大人数默认值设置 (新逻辑)
-    // 2. 校验参数
-    if (!scheduleDate) {
-      throw new Error('排班日期不能为空');
-    }
-    if (!timeSlot) {
-      throw new Error('时段不能为空');
-    }
-    
-    let finalMaxCount = parseInt(inputMaxCount, 10);
-    
-    // 如果 inputMaxCount 无效 (NaN, null, 0 等)，或者小于最小值，则使用默认最小值
-    if (isNaN(finalMaxCount) || finalMaxCount < MIN_MAX_COUNT) {
-        finalMaxCount = MIN_MAX_COUNT;
-        console.warn(`排班提报的最大人数无效或低于下限，已自动设置为 ${MIN_MAX_COUNT}`);
-    }
+      // 3. 查找排班并校验权限
+      const schedule = await Schedule.findOne({ 
+        where: { 
+          scheduleId: scheduleId,
+          doctorId: doctorId // 确保只能操作自己的排班
+        },
+        transaction 
+      });
 
+      if (!schedule) {
+        await transaction.rollback();
+        return res.status(404).json({ code: 404, message: '未找到排班记录或无权限操作' });
+      }
 
-    // 4. 检查是否重复提报
+      // 4. 更新排班的候补名额限制
+      await schedule.update({ waitingListLimit }, { transaction });
+
+      await transaction.commit();
+
+      return res.status(200).json({
+        code: 200,
+        message: '排班候补名额限制已更新',
+        data: { 
+          scheduleId: schedule.scheduleId,
+          scheduleDate: schedule.scheduleDate,
+          timeSlot: schedule.timeSlot,
+          allowWaiting: schedule.allowWaiting,
+          waitingListLimit: schedule.waitingListLimit,
+          maxCount: schedule.maxCount,
+          availableCount: schedule.availableCount
+        }
+      });
+
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+  } catch (error) {
+    console.error('更新排班候补名额限制失败:', error);
+    return res.status(500).json({ code: 500, message: '更新排班候补名额限制失败' });
+  }
+};
+
+// 医生端：提报排班计划 (新增 - 包含最大人数校验)
+exports.proposeSchedule = async (req, res) => {
+  // 用户信息空值检测
+  const userInfo = req.user;
+  if (!userInfo) {
+    return res.status(401).json({ code: 401, message: '用户未登录或登录状态已过期' });
+  }
+  
+  const { userId, role } = userInfo;
+  if (!userId || !role) {
+    return res.status(401).json({ code: 401, message: '用户信息不完整' });
+  }
+  
+  // 角色校验
+  if (role !== 'doctor') {
+    return res.status(403).json({ code: 403, message: '无权限：仅医生可提报排班' });
+  }
+  
+  // 确保req.body存在
+  if (!req.body) {
+    return res.status(400).json({ code: 400, message: '请求体不能为空' });
+  }
+  
+  // maxCount 可能是 null 或未定义，需要处理
+  const { scheduleDate, timeSlot, maxCount: inputMaxCount } = req.body; 
+
+  // 获取 doctorId 
+  const doctor = await Doctor.findOne({ where: { userId: userId } });
+  if (!doctor) {
+    return res.status(403).json({ code: 403, message: '医生信息不存在或未绑定账号' });
+  }
+  const doctorId = doctor.doctorId; 
+
+  // 参数验证与最大人数默认值设置
+  if (!scheduleDate) {
+    return res.status(400).json({ code: 400, message: '排班日期不能为空' });
+  }
+  if (!timeSlot) {
+    return res.status(400).json({ code: 400, message: '时段不能为空' });
+  }
+  
+  let finalMaxCount = parseInt(inputMaxCount, 10);
+  
+  // 如果 inputMaxCount 无效 (NaN, null, 0 等)，或者小于最小值，则使用默认最小值
+  if (isNaN(finalMaxCount) || finalMaxCount < MIN_MAX_COUNT) {
+      finalMaxCount = MIN_MAX_COUNT;
+      console.warn(`排班提报的最大人数无效或低于下限，已自动设置为 ${MIN_MAX_COUNT}`);
+  }
+
+  try {
+    // 检查是否重复提报
     const existingSchedule = await Schedule.findOne({
       where: {
         doctorId: doctorId,
@@ -1246,7 +1328,7 @@ exports.proposeSchedule = async (req, res) => {
       return res.status(400).json({ code: 400, message: '该时段排班已存在，请勿重复提报' });
     }
 
-    // 5. 创建排班记录， auditStatus 设为 pending
+    // 创建排班记录， auditStatus 设为 pending
     // 不包含scheduleId字段，让Sequelize自动处理自增
     const newSchedule = await Schedule.create({
       doctorId: doctorId,
@@ -1255,9 +1337,7 @@ exports.proposeSchedule = async (req, res) => {
       maxCount: finalMaxCount,
       availableCount: finalMaxCount,
       auditStatus: 'pending'
-    }, { transaction });
-
-    await transaction.commit();
+    });
 
     return res.status(201).json({ 
         code: 201, 
@@ -1269,16 +1349,8 @@ exports.proposeSchedule = async (req, res) => {
         } 
     });
 
-      } catch (error) {
-        await transaction.rollback();
-        console.error('提报排班计划失败:', error);
-        if (error.message === '排班日期不能为空' || error.message === '时段不能为空') {
-          return res.status(400).json({ code: 400, message: error.message });
-        }
-        return res.status(500).json({ code: 500, message: '提报排班计划失败' });
-      }
-    } catch (error) {
-      console.error('proposeSchedule 接口执行错误:', error);
-      return res.status(500).json({ code: 500, message: '服务器内部错误' });
-    }
+  } catch (error) {
+    console.error('提报排班计划失败:', error);
+    return res.status(500).json({ code: 500, message: '提报排班计划失败' });
+  }
 };
