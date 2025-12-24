@@ -20,11 +20,11 @@ const createRateLimiter = (options = {}) => {
 
   return async (req, res, next) => {
     try {
-      // 获取客户端IP地址
-      const clientIp = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
+      // 获取客户端标识：优先使用用户ID（已认证），否则使用IP地址
+      const clientIdentifier = req.user?.userId || (req.ip || req.connection.remoteAddress || req.socket.remoteAddress);
       
       // 生成Redis键名
-      const key = `rate_limit:${action}:${clientIp}`;
+      const key = `rate_limit:${action}:${clientIdentifier}`;
       
       // 检查Redis连接
       if (!isRedisConnected()) {
@@ -37,13 +37,13 @@ const createRateLimiter = (options = {}) => {
       
       if (currentCount && parseInt(currentCount) >= maxRequests) {
         // 详细记录限流信息
-        console.log(`限流触发: IP=${clientIp}, 当前计数=${currentCount}, 阈值=${maxRequests}`);
+        console.log(`限流触发: 客户端标识=${clientIdentifier}, 当前计数=${currentCount}, 阈值=${maxRequests}`);
         console.log(`用户信息: ${JSON.stringify(req.user)}`);
         try {
           // 记录防抢号日志
           const logEntry = await AntiHoardingLog.create({
             userId: req.user?.userId || null,
-            ipAddress: clientIp,
+            ipAddress: clientIdentifier,
             requestTime: new Date(),
             logType: 'high_frequency'
           });
@@ -96,8 +96,8 @@ const rateLimitMiddleware = {
   
   // 预约接口限流
   appointmentLimiter: createRateLimiter({
-    maxRequests: 10, // 临时增加到100次用于测试
-    windowMs: 60000, // 5分钟内最多100次预约请求
+    maxRequests: 200, // 提高到200次用于测试
+    windowMs: 60000, // 1分钟内最多200次预约请求
     action: 'appointment'
   }),
   

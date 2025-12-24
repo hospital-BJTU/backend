@@ -10,10 +10,14 @@ const sequelize = new Sequelize(
     host: process.env.DB_HOST,
     port: process.env.DB_PORT,
     dialect: 'mysql',
+    dialectOptions: {
+      // 设置事务隔离级别为REPEATABLE READ，平衡并发性能和数据一致性
+      isolationLevel: Sequelize.Transaction.ISOLATION_LEVELS.REPEATABLE_READ
+    },
     pool: {
-      max: 5,
-      min: 0,
-      acquire: 30000,
+      max: 100, // 大幅增加数据库连接池大小以支持更高并发
+      min: 10,  // 增加最小连接数
+      acquire: 60000, // 增加获取连接的超时时间
       idle: 10000
     },
     logging: false, // 禁用SQL查询日志输出
