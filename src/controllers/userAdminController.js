@@ -6,7 +6,13 @@ require('dotenv').config();
 // 获取所有用户
 exports.getAllUsers = async (req, res) => {
   try {
+    // 分页参数设置合理的最大值限制
+    const MAX_PAGE = 1000;
+    const MAX_LIMIT = 100;
     const { username, role, page = 1, limit = 10 } = req.query; // 添加 role, page, limit 参数，并设置默认值
+    // 验证分页参数
+    const validPage = Math.min(Math.max(parseInt(page, 10) || 1, 1), MAX_PAGE);
+    const validLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), MAX_LIMIT);
     const where = {};
     
     if (username) {
@@ -17,13 +23,13 @@ exports.getAllUsers = async (req, res) => {
       where.role = role;
     }
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (validPage - 1) * validLimit;
 
     const { count, rows } = await User.findAndCountAll({
       where,
       attributes: ['userId', 'username', 'role', 'phone', 'verifyStatus', 'createdAt'], // 确保属性名与模型定义一致
       offset,
-      limit: parseInt(limit),
+      limit: validLimit,
     });
     
     res.status(200).json({

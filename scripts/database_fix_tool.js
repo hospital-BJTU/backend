@@ -115,7 +115,37 @@ async function fixScheduleTable() {
         return false;
     }
 
-    // 5. 重新启用外键检查
+    // 5. 检查并添加waiting_list_limit字段
+    const [waitingListLimitColumns] = await sequelize.query(
+      "SHOW COLUMNS FROM tb_schedule WHERE Field = 'waiting_list_limit';"
+    );
+    
+    if (waitingListLimitColumns.length > 0) {
+      logInfo('waiting_list_limit字段已存在于tb_schedule表中');
+      // 检查字段类型和默认值是否正确
+      const fieldType = waitingListLimitColumns[0].Type;
+      if (fieldType.includes('int') && waitingListLimitColumns[0].Default === '2') {
+        logInfo('waiting_list_limit字段类型和默认值已正确配置');
+      } else {
+        logInfo('waiting_list_limit字段类型或默认值不正确，需要修改');
+        // 修改字段类型和默认值
+        await sequelize.query(`
+          ALTER TABLE tb_schedule 
+          MODIFY COLUMN waiting_list_limit INT DEFAULT 2 COMMENT '候补队列名额限制，默认为2个';
+        `);
+        logSuccess('waiting_list_limit字段类型和默认值修复成功');
+      }
+    } else {
+      logInfo('waiting_list_limit字段不存在，将添加到tb_schedule表中');
+      // 添加waiting_list_limit字段
+      await sequelize.query(`
+        ALTER TABLE tb_schedule 
+        ADD COLUMN waiting_list_limit INT DEFAULT 2 COMMENT '候补队列名额限制，默认为2个';
+      `);
+      logSuccess('waiting_list_limit字段添加成功');
+    }
+
+    // 6. 重新启用外键检查
     await sequelize.query('SET FOREIGN_KEY_CHECKS = 1;');
     logInfo('已重新启用外键检查');
     

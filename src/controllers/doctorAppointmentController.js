@@ -2,6 +2,8 @@ const { Appointment, Schedule, Doctor, Department, User, CallLog } = require('..
 const { Op } = require('sequelize');
 // 定义排班最大人数的默认下限值
 const MIN_MAX_COUNT = 10;
+const MAX_MAX_COUNT = 50; // 最大预约数上限
+const MAX_WAITING_LIST_LIMIT = 20; // 最大候诊队列名额上限
 
 // 获取状态描述的辅助函数
 function getStatusDescription(status) {
@@ -42,7 +44,7 @@ async function getScheduleStatus(scheduleId) {
       } : null
     };
   } catch (error) {
-    console.error('获取排班状态失败:', error);
+    
     return null;
   }
 }
@@ -173,7 +175,7 @@ exports.markAppointmentCompletedByDoctor = async (req, res) => {
       throw error;
     }
   } catch (error) {
-    console.error('医生标记接诊完成失败:', error);
+    
     return res.status(500).json({
       code: 500,
       message: '接诊完成处理过程中发生错误',
@@ -329,7 +331,7 @@ exports.callAppointmentByDoctor = async (req, res) => {
       throw error;
     }
   } catch (error) {
-    console.error('医生叫号失败:', error);
+    
     return res.status(500).json({
       code: 500,
       message: '叫号过程中发生错误',
@@ -459,7 +461,7 @@ exports.markAppointmentMissedByDoctor = async (req, res) => {
       throw error;
     }
   } catch (error) {
-    console.error('医生标记过号失败:', error);
+    
     return res.status(500).json({
       code: 500,
       message: '过号处理过程中发生错误',
@@ -605,7 +607,7 @@ exports.getDoctorScheduleStatus = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('获取医生排班状态失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '查询过程中发生错误',
@@ -668,7 +670,7 @@ async function getScheduleStatus(scheduleId) {
       } : null
     };
   } catch (error) {
-    console.error('获取排班状态失败:', error);
+    
     return null;
   }
 }
@@ -819,7 +821,7 @@ exports.getDoctorQueue = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('医生队列查询失败:', error);
+    
     return res.status(500).json({
       code: 500,
       message: '查询过程中发生错误',
@@ -937,7 +939,7 @@ exports.getScheduledDates = async (req, res) => {
     });
     return res.status(200).json({ code: 200, message: '查询有排班日期成功', data: dates });
   } catch (error) {
-    console.error('getScheduledDates error:', error);
+    
     return res.status(500).json({ code: 500, message: '服务器错误' });
   }
 };
@@ -1005,7 +1007,7 @@ exports.getScheduleDetailsByDate = async (req, res) => {
 
     return res.status(200).json({ code: 200, message: '查询排班详情成功', data: formattedDetails });
   } catch (error) {
-    console.error('getScheduleDetailsByDate error:', error);
+    
     return res.status(500).json({ code: 500, message: '服务器错误' });
   }
 };
@@ -1084,7 +1086,7 @@ exports.requestLeaveForSchedule = async (req, res) => {
 
         } catch (error) {
             await transaction.rollback();
-            console.error('requestLeaveForSchedule 接口执行错误:', error);
+            
             return res.status(500).json({ code: 500, message: '服务器内部错误' });
         }
     } catch (error) {
@@ -1173,7 +1175,7 @@ exports.updateScheduleAllowWaiting = async (req, res) => {
       throw error;
     }
   } catch (error) {
-    console.error('更新排班候补设置失败:', error);
+    
     return res.status(500).json({ code: 500, message: '更新排班候补设置失败' });
   }
 };
@@ -1236,7 +1238,15 @@ exports.updateScheduleWaitingLimit = async (req, res) => {
       }
 
       // 4. 更新排班的候补名额限制
-      await schedule.update({ waitingListLimit }, { transaction });
+      // 验证候诊队列名额限制
+      let finalWaitingListLimit = parseInt(waitingListLimit, 10);
+      if (isNaN(finalWaitingListLimit) || finalWaitingListLimit < 0) {
+          finalWaitingListLimit = 0; // 最低为0
+      }
+      if (finalWaitingListLimit > MAX_WAITING_LIST_LIMIT) {
+          finalWaitingListLimit = MAX_WAITING_LIST_LIMIT; // 最高为20
+      }
+      await schedule.update({ waitingListLimit: finalWaitingListLimit }, { transaction });
 
       await transaction.commit();
 
@@ -1259,7 +1269,7 @@ exports.updateScheduleWaitingLimit = async (req, res) => {
       throw error;
     }
   } catch (error) {
-    console.error('更新排班候补名额限制失败:', error);
+    
     return res.status(500).json({ code: 500, message: '更新排班候补名额限制失败' });
   }
 };
@@ -1310,7 +1320,10 @@ exports.proposeSchedule = async (req, res) => {
   // 如果 inputMaxCount 无效 (NaN, null, 0 等)，或者小于最小值，则使用默认最小值
   if (isNaN(finalMaxCount) || finalMaxCount < MIN_MAX_COUNT) {
       finalMaxCount = MIN_MAX_COUNT;
-      console.warn(`排班提报的最大人数无效或低于下限，已自动设置为 ${MIN_MAX_COUNT}`);
+  }
+  // 如果 inputMaxCount 大于最大值，则使用最大值
+  if (finalMaxCount > MAX_MAX_COUNT) {
+      finalMaxCount = MAX_MAX_COUNT;
   }
 
   try {
@@ -1350,7 +1363,7 @@ exports.proposeSchedule = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('提报排班计划失败:', error);
+    
     return res.status(500).json({ code: 500, message: '提报排班计划失败' });
   }
 };

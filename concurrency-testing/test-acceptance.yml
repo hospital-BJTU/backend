@@ -1,0 +1,78 @@
+config:
+  target: "http://localhost:3000"
+  phases:
+    # 预热阶段：5 req/s，持续30秒
+    - duration: 30
+      arrivalRate: 5
+      name: 预热阶段
+    # 标准负载阶段：20 req/s，持续90秒（模拟校医院高峰）
+    - duration: 90
+      arrivalRate: 20
+      name: 标准负载阶段
+    # 峰值验收阶段：50 req/s，持续60秒（证明系统健壮性）
+    - duration: 60
+      arrivalRate: 50
+      name: 峰值验收阶段
+  defaults:
+    headers:
+      Content-Type: "application/json"
+      Connection: "keep-alive"
+  payload:
+    path: "artillery_test_users.csv"
+    fields: ["username", "password", "phone", "userId", "role"]
+    delimiter: ","
+    skipHeader: true
+    shareIterations: false
+
+# 严格的验收门禁
+ensure:
+  thresholds:
+    - http.response_time.p95: 100  # 95%请求响应时间不超过100ms
+    - http.response_time.p99: 200  # 99%请求响应时间不超过200ms
+    - http.codes.200: 99.5         # 成功率不低于99.5%
+    - http.codes.500: 0            # 不允许500错误
+  conditions:
+    - "http.response_time.p95 < 100"
+    - "http.response_time.p99 < 200"
+    - "http.codes.200 >= 99.5"
+    - "http.codes.500 == 0"
+
+services:
+  - "@artilleryio/plugin-http-async"
+
+scenarios:
+  - name: "验收测试-预约功能"
+    flow:
+      # 步骤1: 用户登录
+      - post:
+          url: "/api/users/login"
+          json:
+            username: "{{ username }}"
+            password: "{{ password }}"
+          capture:
+            - json: "$.data.token"
+              as: "token"
+          expect:
+            - statusCode: 200
+
+      # 步骤2: 获取可预约排班列表
+      - get:
+          url: "/api/user/available-schedules"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          capture:
+            - json: "$.data.schedules[0].scheduleId"
+              as: "scheduleId"
+          expect:
+            - statusCode: 200
+            - hasProperty: "data.schedules"
+
+      # 步骤3: 创建预约 (关键并发测试点)
+      - post:
+          url: "/api/user/appointments"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          json:
+            scheduleId: "{{ scheduleId }}"
+          expect:
+            - statusCode: 201

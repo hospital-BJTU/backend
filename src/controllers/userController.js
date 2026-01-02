@@ -51,7 +51,7 @@ exports.createUser = async (req, res) => {
       });
     }
     
-    const { username, password, role, phone } = req.body;
+    const { username, password, role, phone, deptId, title } = req.body;
     
     // 基本验证
     if (!username || !password) {
@@ -74,6 +74,24 @@ exports.createUser = async (req, res) => {
       }
     }
     
+    // 医生注册时的额外验证
+    if (role === 'doctor') {
+      if (!deptId) {
+        return res.status(400).json({
+          code: 400,
+          message: '医生注册必须填写科室ID',
+          data: null
+        });
+      }
+      if (!title) {
+        return res.status(400).json({
+          code: 400,
+          message: '医生注册必须填写职称',
+          data: null
+        });
+      }
+    }
+    
     // 密码加密
     const hashedPassword = await bcrypt.hash(password, 10);
     
@@ -91,10 +109,22 @@ exports.createUser = async (req, res) => {
       // verifyStatus有默认值'unverified'
     });
     
+    // 如果是医生注册，创建医生信息记录
+    if (role === 'doctor') {
+      // 确保Doctor模型已导入
+      const Doctor = require('../models').Doctor;
+      
+      await Doctor.create({
+        userId: user.userId,
+        deptId: deptId,
+        title: title
+      });
+    }
+    
     // 返回符合要求的格式
     res.status(201).json({
       code: 201,
-      message: '注册成功，请完成身份核验。',
+      message: role === 'doctor' ? '医生注册成功，请等待管理员审核。' : '注册成功，请完成身份核验。',
       data: {
         userId: user.userId,
         username: user.username,
@@ -107,13 +137,13 @@ exports.createUser = async (req, res) => {
     if (error.name === 'SequelizeUniqueConstraintError') {
       return res.status(409).json({
         code: 409,
-        message: '用户名已存在',
+        message: '用户名或手机号已存在',
         data: null
       });
     }
     
     // 添加详细错误日志以帮助调试
-    console.error('注册失败错误详情:', error);
+    
     res.status(500).json({
       code: 500,
       message: '服务器内部错误',
@@ -127,15 +157,8 @@ exports.createUser = async (req, res) => {
 // 用户登录（支持用户名密码登录和微信登录）
 exports.loginUser = async (req, res) => {
   try {
-    console.log('=== 登录请求开始 ===');
-    console.log('请求方法:', req.method);
-    console.log('请求路径:', req.path);
-    console.log('请求头:', req.headers);
-    console.log('请求体:', req.body);
-    
     // 请求体存在性检测
     if (!req.body) {
-      console.log('请求体为空');
       return res.status(400).json({
         code: 400,
         message: '请求体不能为空',
@@ -144,7 +167,6 @@ exports.loginUser = async (req, res) => {
     }
     
     const { username, password, wxCode } = req.body;
-    console.log('登录参数:', { username, password: password ? '******' : undefined, wxCode });
     
     // 微信登录逻辑
     if (wxCode) {
@@ -205,8 +227,6 @@ exports.loginUser = async (req, res) => {
           });
         }
 
-        console.log('微信登录用户对象信息 (用于生成Token):', JSON.stringify(user));
-
         // 生成JWT token
         const token = jwt.sign(
           {
@@ -218,15 +238,8 @@ exports.loginUser = async (req, res) => {
           { expiresIn: JWT_EXPIRES_IN }
         );
         
-        // 解析令牌信息，用于调试和客户端确认
+        // 解析令牌信息
         const decodedToken = jwt.decode(token);
-        console.log('微信登录生成的完整令牌:', token);
-        console.log('微信登录生成的令牌信息:', {
-          decodedToken,
-          userId: user.user_id || user.userId,
-          username: user.username,
-          tokenExpiresAt: new Date(decodedToken.exp * 1000)
-        });
 
         return res.status(200).json({
           code: 200,
@@ -248,7 +261,7 @@ exports.loginUser = async (req, res) => {
           }
         });
       } catch (wechatError) {
-        console.error('微信API调用失败:', wechatError);
+        
         return res.status(500).json({
           code: 500,
           message: '微信登录失败，请稍后重试',
@@ -259,7 +272,6 @@ exports.loginUser = async (req, res) => {
 
     // 用户名密码登录逻辑
     if (!username || !password) {
-      console.log('用户名或密码为空');
       return res.status(400).json({
         code: 400,
         message: '请输入用户名和密码',
@@ -268,13 +280,9 @@ exports.loginUser = async (req, res) => {
     }
     
     // 查找用户
-    console.log('正在查找用户:', username);
     const user = await User.findOne({ where: { username } });
     
-    console.log('用户查找结果:', user ? JSON.stringify(user) : '用户不存在');
-    
     if (!user) {
-      console.log('用户不存在:', username);
       return res.status(401).json({
         code: 401,
         message: '用户名或密码错误',
@@ -287,23 +295,18 @@ exports.loginUser = async (req, res) => {
     
     try {
       // 只使用bcrypt验证密码
-      console.log('正在验证密码');
       isPasswordValid = await bcrypt.compare(password, user.password);
-      console.log('密码验证结果:', isPasswordValid);
     } catch (error) {
-      console.error('密码验证失败:', error);
+      
     }
     
     if (!isPasswordValid) {
-      console.log('密码验证失败');
       return res.status(401).json({
         code: 401,
         message: '用户名或密码错误',
         data: null
       });
     }
-    
-    console.log('用户对象信息 (用于生成Token):', JSON.stringify(user));
 
     // 生成JWT token
     const token = jwt.sign(
@@ -331,7 +334,7 @@ exports.loginUser = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('登录失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '登录失败',
@@ -431,7 +434,7 @@ exports.verifyUser = async (req, res) => {
     
     // 验证身份信息的逻辑可以在这里扩展
     // 例如调用第三方身份验证服务、与数据库中存储的其他用户信息比对等
-    console.log('验证身份信息:', JSON.stringify({ realName, idCard }));
+    
     
     // 对于首次身份核验，直接使用用户输入的信息
     // 如果需要更严格的验证，可以在此处添加第三方验证服务的调用
@@ -483,7 +486,7 @@ exports.verifyUser = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('身份核验失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '身份核验过程中发生错误',
@@ -497,7 +500,7 @@ exports.sendVerificationCode = async (req, res) => {
   try {
     // 请求体存在性检测
     if (!req.body) {
-      console.log('请求体为空');
+      
       return res.status(400).json({
         code: 400,
         message: '请求体不能为空',
@@ -505,11 +508,11 @@ exports.sendVerificationCode = async (req, res) => {
       });
     }
     
-    console.log('收到发送验证码请求:', req.body);
+    
     const { phone } = req.body;
     
     if (!phone) {
-      console.log('手机号为空');
+      
       return res.status(400).json({
         code: 400,
         message: '手机号不能为空',
@@ -520,7 +523,7 @@ exports.sendVerificationCode = async (req, res) => {
     // 验证手机号格式
     const phoneRegex = /^1[3-9]\d{9}$/;
     if (!phoneRegex.test(phone)) {
-      console.log('手机号格式错误:', phone);
+      
       return res.status(400).json({
         code: 400,
         message: '请输入正确的手机号码',
@@ -568,7 +571,7 @@ exports.sendVerificationCode = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('发送验证码失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '发送验证码失败',
@@ -660,7 +663,7 @@ exports.verifyCode = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('验证验证码失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '服务器内部错误',
@@ -742,7 +745,7 @@ exports.resetPassword = async (req, res) => {
       data: null
     });
   } catch (error) {
-    console.error('重置密码失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '重置密码失败',
@@ -813,7 +816,7 @@ exports.changePassword = async (req, res) => {
       // 只使用bcrypt验证密码
       isPasswordValid = await bcrypt.compare(oldPassword, user.password);
     } catch (error) {
-      console.error('原密码验证失败:', error);
+      
     }
     
     if (!isPasswordValid) {
@@ -834,7 +837,7 @@ exports.changePassword = async (req, res) => {
       data: null
     });
   } catch (error) {
-    console.error('修改密码失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '修改密码失败',

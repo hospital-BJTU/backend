@@ -1,21 +1,28 @@
 const axios = require('axios');
 const fs = require('fs');
+const csv = require('csv-parser');
 
 // 配置信息
 const API_BASE_URL = 'http://localhost:3000/api';
 const LOG_FILE = `anti_hoarding_acceptance_test_${Date.now()}.log`;
+const CSV_FILE_PATH = './concurrency-testing/artillery_test_users.csv'; // 测试用户CSV文件路径（使用明文密码）
 
-// 测试用户凭据
-const TEST_USERS = [
-  { username: 'patient_li', password: 'pwd123', role: 'patient' },
-  { username: 'patient_zhang', password: 'pwd123', role: 'patient' },
-  { username: 'patient_wang', password: 'pwd123', role: 'patient' },
-  { username: 'patient_liu', password: 'pwd123', role: 'patient' },
-  { username: 'patient_chen', password: 'pwd123', role: 'patient' }
+// 测试用户凭据 - 直接定义测试用户，避免CSV解析问题
+let TEST_USERS = [
+  { username: 'patient_1003', password: 'test123', role: 'patient' },
+  { username: 'patient_1004', password: 'test123', role: 'patient' },
+  { username: 'patient_1005', password: 'test123', role: 'patient' },
+  { username: 'patient_1006', password: 'test123', role: 'patient' },
+  { username: 'patient_1007', password: 'test123', role: 'patient' }
 ];
 
-// 管理员用户配置
-const ADMIN_USER = { username: 'admin_super', password: 'pwd123' };
+// 从CSV文件加载测试用户（保留函数接口，但直接返回定义的用户）
+function loadTestUsers() {
+  return Promise.resolve(TEST_USERS);
+}
+
+// 管理员用户配置 - 使用默认管理员账户
+const ADMIN_USER = { username: 'admin_super', password: 'admin123' };
 
 // 日志记录函数
 function log(message, level = 'INFO') {
@@ -113,23 +120,26 @@ async function createAppointment(token, scheduleId, captchaId, captchaCode) {
 // 通过用户名获取用户ID
 async function getUserIdByUsername(adminToken, username) {
   try {
-    // 这里需要实现通过用户名查找用户ID的逻辑
-    // 由于没有直接的API，我们可以通过已知的用户映射来获取
-    const userMap = {
-      'patient_zhang': 1001,
-      'patient_li': 1002,
-      'patient_wang': 1003,
-      'patient_liu': 1004,
-      'patient_chen': 1005,
-      'admin': 1
-    };
+    // 加载环境变量
+    if (!process.env.MYSQL_HOST) {
+      process.env.DOTENV_SILENT = '1';
+      const dotenv = require('dotenv');
+      dotenv.config({ debug: false, silent: true });
+    }
     
-    if (userMap[username]) {
-      return userMap[username];
+    // 导入数据库配置和模型
+    const { User } = require('../src/models');
+    
+    // 从数据库中查询用户ID
+    const user = await User.findOne({ where: { username } });
+    
+    if (user) {
+      return user.userId;
     } else {
       throw new Error(`未知用户: ${username}`);
     }
   } catch (error) {
+    logError('通过用户名获取用户ID失败', error);
     throw error;
   }
 }
@@ -217,16 +227,18 @@ async function testBlacklistMechanism() {
   };
   
   try {
+    // 测试被封禁(banned)状态
+    log('\n测试1: 验证被封禁(banned)状态用户');
+    const testUser = TEST_USERS[0];
+    
     // 管理员登录
     const adminToken = await login(ADMIN_USER.username, ADMIN_USER.password);
     
-    // 测试被封禁(banned)状态
-    log('\n测试1: 验证被封禁(banned)状态用户');
-    await updateUserStatus(adminToken, 'patient_li', 'banned', '测试封禁');
+    await updateUserStatus(adminToken, testUser.username, 'banned', '测试封禁');
     log('✓ 用户封禁成功');
     
     // 被封禁用户登录
-    const bannedPatientToken = await login('patient_li', 'pwd123');
+    const bannedPatientToken = await login(testUser.username, testUser.password);
     
     // 获取验证码
     const captcha1 = await getCaptcha();
@@ -247,15 +259,15 @@ async function testBlacklistMechanism() {
     }
     
     // 恢复用户状态
-    await updateUserStatus(adminToken, 'patient_li', 'active', '测试恢复');
+    await updateUserStatus(adminToken, testUser.username, 'active', '测试恢复');
     
     // 测试临时锁定(temp_locked)状态
     log('\n测试2: 验证临时锁定(temp_locked)状态用户');
-    await updateUserStatus(adminToken, 'patient_li', 'temp_locked', '测试临时锁定');
+    await updateUserStatus(adminToken, testUser.username, 'temp_locked', '测试临时锁定');
     log('✓ 用户临时锁定成功');
     
     // 临时锁定用户登录
-    const tempLockedPatientToken = await login('patient_li', 'pwd123');
+    const tempLockedPatientToken = await login(testUser.username, testUser.password);
     
     // 获取验证码
     const captcha2 = await getCaptcha();
@@ -276,7 +288,7 @@ async function testBlacklistMechanism() {
     }
     
     // 恢复用户状态（清理测试数据）
-    await updateUserStatus(adminToken, 'patient_li', 'active', '测试恢复');
+    await updateUserStatus(adminToken, testUser.username, 'active', '测试恢复');
     log('✓ 用户状态恢复成功（清理测试数据）');
     
     // 验证两个测试都通过
@@ -309,14 +321,17 @@ async function testRateLimitingMechanism() {
   };
   
   try {
-    // 1. 管理员登录确保用户状态为活跃
+    // 1. 获取测试用户
+    const testUser = TEST_USERS[1];
+    
+    // 2. 管理员登录确保用户状态为活跃
     const adminToken = await login(ADMIN_USER.username, ADMIN_USER.password);
-    // 确保patient_li用户状态为active，以便请求能到达限流中间件
-    await updateUserStatus(adminToken, 'patient_li', 'active', '测试前确保活跃');
+    // 确保测试用户状态为active，以便请求能到达限流中间件
+    await updateUserStatus(adminToken, testUser.username, 'active', '测试前确保活跃');
     log('✓ 用户状态已确保为活跃');
     
-    // 2. 患者登录
-    const patientToken = await login('patient_li', 'pwd123');
+    // 3. 患者登录
+    const patientToken = await login(testUser.username, testUser.password);
     log('✓ 患者登录成功');
     
     // 2. 快速连续发送请求（超过限流阈值）
@@ -324,25 +339,32 @@ async function testRateLimitingMechanism() {
     let successCount = 0;
     let rateLimitedCount = 0;
     
-    for (let i = 0; i < 6; i++) { // 超过默认的5次限制
+    // 预约接口限流是200次/分钟，所以我们发送210次请求来触发限流
+    for (let i = 0; i < 210; i++) {
       try {
         const captcha = await getCaptcha();
         const captchaCode = captcha.debugCode || '1234';
         
         const result = await createAppointment(patientToken, 1, captcha.captchaId, captchaCode);
         successCount++;
-        log(`第${i+1}次请求: 成功`);
+        if ((i + 1) % 20 === 0) { // 每20次请求打印一次进度
+          log(`第${i+1}次请求: 成功`);
+        }
       } catch (error) {
         if (error.response && error.response.status === 429) {
           rateLimitedCount++;
-          log(`第${i+1}次请求: 被限流 (429 Too Many Requests)`);
+          if ((i + 1) % 20 === 0) { // 每20次请求打印一次进度
+            log(`第${i+1}次请求: 被限流 (429 Too Many Requests)`);
+          }
         } else {
-          log(`第${i+1}次请求: 其他错误 - ${error.message}`);
+          if ((i + 1) % 20 === 0) { // 每20次请求打印一次进度
+            log(`第${i+1}次请求: 其他错误 - ${error.message}`);
+          }
         }
       }
       
       // 极短延迟，模拟快速请求
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
     
     // 3. 验证结果
@@ -403,15 +425,18 @@ async function testDefenseChainOrder() {
   };
   
   try {
-    // 1. 管理员登录并封禁用户
+    // 1. 获取测试用户
+    const testUser = TEST_USERS[2];
+    
+    // 2. 管理员登录并封禁用户
     const adminToken = await login(ADMIN_USER.username, ADMIN_USER.password);
-    await banUser(adminToken, 'patient_li');
+    await banUser(adminToken, testUser.username);
     log('✓ 用户封禁成功');
     
-    // 2. 被封禁用户登录
-    const patientToken = await login('patient_li', 'pwd123');
+    // 3. 被封禁用户登录
+    const patientToken = await login(testUser.username, testUser.password);
     
-    // 3. 快速连续发送请求（同时触发黑名单和限流）
+    // 4. 快速连续发送请求（同时触发黑名单和限流）
     const responses = [];
     
     for (let i = 0; i < 4; i++) {
@@ -433,7 +458,7 @@ async function testDefenseChainOrder() {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     
-    // 4. 验证所有请求都返回403（黑名单优先）
+    // 5. 验证所有请求都返回403（黑名单优先）
     const all403 = responses.every(r => r.statusCode === 403);
     
     if (all403) {
@@ -448,8 +473,8 @@ async function testDefenseChainOrder() {
       log('✗ 防御链顺序验证失败');
     }
     
-    // 5. 解封用户（清理测试数据）
-    await unbanUser(adminToken, 'patient_li');
+    // 6. 解封用户（清理测试数据）
+    await unbanUser(adminToken, testUser.username);
     log('✓ 用户解封成功（清理测试数据）');
     
   } catch (error) {
@@ -506,16 +531,19 @@ async function testUserHoardingBehavior() {
   };
   
   try {
-    // 管理员登录确保用户状态为活跃
+    // 1. 获取测试用户
+    const testUser = TEST_USERS[3];
+    
+    // 2. 管理员登录确保用户状态为活跃
     const adminToken = await login(ADMIN_USER.username, ADMIN_USER.password);
-    await updateUserStatus(adminToken, 'patient_zhang', 'active', '测试前确保活跃');
+    await updateUserStatus(adminToken, testUser.username, 'active', '测试前确保活跃');
     log('✓ 用户状态已确保为活跃');
     
-    // 患者登录
-    const patientToken = await login('patient_zhang', 'pwd123');
+    // 3. 患者登录
+    const patientToken = await login(testUser.username, testUser.password);
     log('✓ 患者登录成功');
     
-    // 记录测试前的日志数量
+    // 4. 记录测试前的日志数量
     const preTestLogs = await queryAntiHoardingLogs();
     const preTestLogCount = preTestLogs.length;
     log(`测试前防抢号日志数量: ${preTestLogCount}`);
@@ -672,6 +700,11 @@ async function main() {
     // 检查服务器是否运行
     await axios.get(`${API_BASE_URL}/captcha/generate`, { timeout: 5000 });
     log('服务器连接正常，开始验收测试...');
+    
+    // 加载测试用户
+    log('从CSV文件加载测试用户...');
+    await loadTestUsers();
+    log(`成功加载 ${TEST_USERS.length} 个测试用户`);
     
     const results = await runAcceptanceTests();
     

@@ -1,4 +1,4 @@
-const { Sequelize } = require('sequelize');
+const { Sequelize, Op } = require('sequelize');
 // dotenv已在server.js中全局配置
 
 // 创建Sequelize实例
@@ -15,9 +15,9 @@ const sequelize = new Sequelize(
       isolationLevel: Sequelize.Transaction.ISOLATION_LEVELS.REPEATABLE_READ
     },
     pool: {
-      max: 100, // 大幅增加数据库连接池大小以支持更高并发
-      min: 10,  // 增加最小连接数
-      acquire: 60000, // 增加获取连接的超时时间
+      max: 200, // 增加到200以支持更高并发
+      min: 20,  // 增加最小连接数
+      acquire: 120000, // 增加获取连接的超时时间
       idle: 10000
     },
     logging: false, // 禁用SQL查询日志输出
@@ -43,4 +43,4 @@ const connectDB = async () => {
   }
 };
 
-module.exports = { sequelize, connectDB };
+module.exports = { sequelize, connectDB, Op };
