@@ -2,6 +2,7 @@
 
 const { Appointment, Schedule, Doctor, Department, User, CallLog, AuditLog } = require('../models');
 const { Op } = require('sequelize');
+const inventoryRedisManager = require('../utils/inventoryRedisManager');
 
 // 管理员端：设置用户账户状态
 const setUserAccountStatus = async (req, res) => {
@@ -222,6 +223,11 @@ exports.auditSchedule = async (req, res) => {
             // audit_by: req.user.userId, // 记录操作的管理员ID (可选)
             // audit_time: new Date()
         }, { transaction });
+
+        // 如果批准排班，同步库存到Redis
+         if (newStatus === 'approved') {
+             await inventoryRedisManager.updateInventory(parsedScheduleId, schedule.availableCount);
+         }
 
         // 4. 记录审核日志（使用智能方法，支持新旧字段）
         await AuditLog.createSmartLog({
@@ -654,11 +660,18 @@ module.exports = {
     setUserStatus: exports.setUserStatus,
     getDepartments: async (req, res) => {
         try {
+            // 分页参数设置合理的最大值限制
+            const MAX_PAGE = 1000;
+            const MAX_LIMIT = 100;
             const { page = 1, limit = 10, keyword } = req.query;
+            // 验证分页参数
+            const validPage = Math.min(Math.max(parseInt(page, 10) || 1, 1), MAX_PAGE);
+            const validLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), MAX_LIMIT);
+            
             const where = keyword ? { deptName: { [Op.like]: `%${keyword}%` } } : {};
-            const offset = (parseInt(page) - 1) * parseInt(limit);
-            const { rows, count } = await Department.findAndCountAll({ where, limit: parseInt(limit), offset });
-            return res.status(200).json({ code: 200, message: '查询成功', data: { list: rows, total: count, page: parseInt(page), limit: parseInt(limit) } });
+            const offset = (validPage - 1) * validLimit;
+            const { rows, count } = await Department.findAndCountAll({ where, limit: validLimit, offset });
+            return res.status(200).json({ code: 200, message: '查询成功', data: { list: rows, total: count, page: validPage, limit: validLimit } });
         } catch (error) {
             return res.status(500).json({ code: 500, message: '服务器内部错误', data: null });
         }

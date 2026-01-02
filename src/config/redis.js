@@ -6,7 +6,21 @@ const redisClient = createClient({
   host: process.env.REDIS_HOST || 'localhost',
   port: process.env.REDIS_PORT || 6379,
   password: process.env.REDIS_PASSWORD || undefined,
-  database: process.env.REDIS_DB || 0
+  database: process.env.REDIS_DB || 0,
+  socket: {
+    // 连接池配置
+    connectTimeout: 30000, // 连接超时时间30秒
+    lazyConnect: false, // 立即连接
+    keepAlive: 300000, // 保持连接5分钟
+    reconnectStrategy: (retries) => {
+      // 重连策略：指数退避
+      if (retries > 10) {
+        console.error('Redis重连失败次数过多，停止重连');
+        return new Error('Redis重连失败');
+      }
+      return Math.min(retries * 100, 3000); // 最大重连间隔3秒
+    }
+  }
 });
 
 // 连接Redis

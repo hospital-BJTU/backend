@@ -15,7 +15,7 @@ exports.getAllDepartments = async (req, res) => {
       data: departments
     });
   } catch (error) {
-    console.error('获取科室列表失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '获取科室列表失败',
@@ -37,7 +37,7 @@ exports.getDoctorsByDepartment = async (req, res) => {
       });
     }
 
-    console.log(`查询科室 ${deptId} 的医生列表`);
+    
 
     const doctors = await Doctor.findAll({
       where: { 
@@ -60,7 +60,7 @@ exports.getDoctorsByDepartment = async (req, res) => {
       attributes: ['doctorId', 'userId', 'deptId', 'title']
     });
 
-    console.log(`找到 ${doctors.length} 名已审核的医生`);
+    
 
     res.status(200).json({
       code: 200,
@@ -68,7 +68,7 @@ exports.getDoctorsByDepartment = async (req, res) => {
       data: doctors
     });
   } catch (error) {
-    console.error('获取科室医生列表失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '获取科室医生列表失败',
@@ -161,7 +161,7 @@ exports.getDoctorSchedules = async (req, res) => {
       data: schedulesWithAvailability
     });
   } catch (error) {
-    console.error('获取医生排班信息失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '获取医生排班信息失败',
@@ -296,7 +296,7 @@ exports.getAvailableSlotsByDate = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('获取可用号源失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '获取可用号源失败',
@@ -318,7 +318,7 @@ exports.getDoctorDetail = async (req, res) => {
       });
     }
     
-    console.log(`查询医生详情，ID: ${doctorId}`);
+    
 
     // 首先检查医生是否存在，不限制审核状态
     const doctorExists = await Doctor.findOne({
@@ -326,7 +326,7 @@ exports.getDoctorDetail = async (req, res) => {
     });
     
     if (!doctorExists) {
-      console.log(`医生ID ${doctorId} 不存在`);
+      
       return res.status(404).json({
         code: 404,
         message: `医生ID ${doctorId} 不存在`,
@@ -334,7 +334,7 @@ exports.getDoctorDetail = async (req, res) => {
       });
     }
     
-    console.log(`医生存在，userId: ${doctorExists.userId}`);
+    
 
     // 检查用户的审核状态
     const userStatus = await User.findOne({
@@ -343,7 +343,7 @@ exports.getDoctorDetail = async (req, res) => {
     });
     
     if (!userStatus) {
-      console.log(`医生ID ${doctorId} 对应的用户不存在`);
+      
       return res.status(404).json({
         code: 404,
         message: '医生对应的用户信息不存在',
@@ -351,7 +351,7 @@ exports.getDoctorDetail = async (req, res) => {
       });
     }
     
-    console.log(`用户审核状态: ${userStatus.verifyStatus}`);
+    
     
     if (userStatus.verifyStatus !== 'verified') {
       return res.status(404).json({
@@ -395,7 +395,7 @@ exports.getDoctorDetail = async (req, res) => {
       data: doctor
     });
   } catch (error) {
-    console.error('获取医生详情失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '获取医生详情失败',
@@ -482,7 +482,7 @@ exports.getDoctorsByDate = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('获取指定日期的医生列表失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '获取指定日期的医生列表失败',

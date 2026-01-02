@@ -11,7 +11,13 @@ const JWT_EXPIRES_IN = '24h'; // Token过期时间
 // 获取所有医生
 exports.getAllDoctors = async (req, res) => {
   try {
+    // 分页参数设置合理的最大值限制
+    const MAX_PAGE = 1000;
+    const MAX_LIMIT = 100;
     const { username, deptId, title, verifyStatus, page = 1, limit = 10 } = req.query; // 添加 deptId, title, verifyStatus, page, limit 参数
+    // 验证分页参数
+    const validPage = Math.min(Math.max(parseInt(page, 10) || 1, 1), MAX_PAGE);
+    const validLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), MAX_LIMIT);
     
     const doctorWhere = {};
     const userWhere = {};
@@ -32,7 +38,7 @@ exports.getAllDoctors = async (req, res) => {
       userWhere.verifyStatus = verifyStatus;
     }
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (validPage - 1) * validLimit;
 
     const { count, rows } = await Doctor.findAndCountAll({
       where: doctorWhere,
@@ -50,7 +56,7 @@ exports.getAllDoctors = async (req, res) => {
       ],
       attributes: ['doctorId', 'userId', 'deptId', 'title'], // 统一属性名为 camelCase
       offset,
-      limit: parseInt(limit),
+      limit: validLimit,
     });
 
     res.status(200).json({

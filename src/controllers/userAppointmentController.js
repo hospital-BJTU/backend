@@ -1,7 +1,9 @@
 const { Appointment, Schedule, Doctor, Department, User, UserProfile, WaitingList } = require('../models');
-const { Op } = require('sequelize');
+const { Sequelize, Op } = require('sequelize');
+const { sequelize } = require('../config/database');
 const AntiHoardingLogModel = require('../models/AntiHoardingLog');
 const AntiHoardingLog = AntiHoardingLogModel.getModel();
+const inventoryRedisManager = require('../utils/inventoryRedisManager');
 
 // 获取北京时间本地日期 (YYYY-MM-DD)
 const getLocalToday = () => {
@@ -38,7 +40,7 @@ function calculateEstimatedTime(scheduleDate, timeSlot, waitingCount) {
     
     return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
   } catch (error) {
-    console.error('计算预计就诊时间失败:', error);
+    
     return null;
   }
 }
@@ -90,22 +92,22 @@ exports.processWaitingListForSchedule = async function processWaitingListForSche
         }, { transaction });
         
         // 减少排班余号数（使用原子更新SQL避免并发更新丢失问题）
-        await Schedule.sequelize.query(
+        await sequelize.query(
           'UPDATE tb_schedule SET available_count = available_count - 1 WHERE schedule_id = :scheduleId',
           {
             replacements: { scheduleId },
             transaction,
-            type: Schedule.sequelize.QueryTypes.UPDATE
+            type: sequelize.QueryTypes.UPDATE
           }
         );
         
-        console.log(`已将候补用户 ${nextWaiting.userId} 的预约转正，排班ID: ${scheduleId}`);
+        
         return true;
       }
     }
     return false;
   } catch (error) {
-    console.error(`处理排班${scheduleId}的候补队列失败:`, error);
+    
     return false;
   }
 }
@@ -113,14 +115,6 @@ exports.processWaitingListForSchedule = async function processWaitingListForSche
 // 创建预约（患者端）
 exports.createAppointment = async (req, res) => {
   try {
-    console.log('=== 预约创建方法开始 ===');
-    console.log('请求路径:', req.path);
-    console.log('请求方法:', req.method);
-    console.log('请求体:', JSON.stringify(req.body));
-    console.log('req.user内容:', JSON.stringify(req.user));
-    console.log('req.user存在性:', !!req.user);
-    console.log('req.user.user_id存在性:', !!req.user?.user_id);
-    console.log('req.user.userId存在性:', !!req.user?.userId);
     // 请求体存在性检测
     if (!req.body) {
       return res.status(400).json({
@@ -131,18 +125,14 @@ exports.createAppointment = async (req, res) => {
     }
     
     // 用户信息空值检测
-    console.log('=== 检查用户登录状态 ===');
-    console.log('req.user:', JSON.stringify(req.user));
     // 用户登录状态检查 - 同时检查user_id和userId属性以确保兼容性
     if (!req.user || (!req.user.user_id && !req.user.userId)) {
-      console.log('用户未登录，req.user:', req.user);
       return res.status(401).json({
         code: 401,
         message: '用户未登录或登录状态已过期',
         data: null
       });
     }
-    console.log('用户登录状态检查通过，用户ID:', req.user.user_id);
     
     const { scheduleId} = req.body;
     const userId = req.user.user_id;
@@ -219,19 +209,17 @@ exports.createAppointment = async (req, res) => {
       }
     }
 
-    // 开始事务
-    const transaction = await Appointment.sequelize.transaction();
+    // 1. 先从Redis检查库存
+    const redisInventory = await inventoryRedisManager.getInventory(numericScheduleId);
     
-    try {
-      // 查找排班信息，使用lock: true来确保并发安全
+    if (!redisInventory || redisInventory <= 0) {
+      // Redis中没有库存或库存不足，再查数据库作为后备
       const schedule = await Schedule.findOne({
-        where: { scheduleId: numericScheduleId, auditStatus: 'approved' },
-        transaction,
-        lock: true
+        where: { scheduleId: numericScheduleId, auditStatus: 'approved', availableCount: { [Op.gt]: 0 } },
+        attributes: ['availableCount']
       });
       
       if (!schedule || schedule.availableCount <= 0) {
-        await transaction.rollback();
         return res.status(400).json({
           code: 400,
           message: '该排班不可用或号源已用完',
@@ -239,7 +227,45 @@ exports.createAppointment = async (req, res) => {
         });
       }
       
-      // 实时时间比对 - 检查是否可以预约
+      // 将数据库中的库存同步到Redis
+        await inventoryRedisManager.updateInventory(numericScheduleId, schedule.availableCount);
+      }
+      
+      // 2. 尝试从Redis扣减库存
+      const inventoryDeducted = await inventoryRedisManager.decrementInventory(numericScheduleId);
+      
+      if (!inventoryDeducted) {
+        return res.status(400).json({
+          code: 400,
+          message: '该排班不可用或号源已用完',
+          data: null
+        });
+      }
+      
+      // 3. 开始事务，使用READ COMMITTED隔离级别减少锁争用
+      const transaction = await sequelize.transaction({
+        isolationLevel: Sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
+      });
+      
+      try {
+        // 4. 查找排班信息（用于其他验证）
+        const schedule = await Schedule.findOne({
+          where: { scheduleId: numericScheduleId, auditStatus: 'approved' },
+          transaction
+        });
+        
+        if (!schedule) {
+          await transaction.rollback();
+          // 回滚Redis库存
+          await inventoryRedisManager.incrementInventory(numericScheduleId);
+          return res.status(400).json({
+            code: 400,
+            message: '该排班不可用或号源已用完',
+            data: null
+          });
+        }
+      
+        // 实时时间比对 - 检查是否可以预约
       const today = getLocalToday();
       const now = new Date();
       const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -251,7 +277,9 @@ exports.createAppointment = async (req, res) => {
       
       // 1. 拦截过期日期
       if (scheduleDateStr < today) {
-        if (transaction) await transaction.rollback();
+        await transaction.rollback();
+        // 回滚Redis库存
+        await inventoryRedisManager.incrementInventory(numericScheduleId);
         return res.status(400).json({ code: 400, message: '不能预约过去日期的号源' });
       }
       
@@ -259,7 +287,9 @@ exports.createAppointment = async (req, res) => {
       if (scheduleDateStr === today) {
         const startTime = schedule.timeSlot.split('-')[0]; // 从 "09:00-10:00" 提取 "09:00"
         if (currentTime >= startTime) {
-          if (transaction) await transaction.rollback();
+          await transaction.rollback();
+          // 回滚Redis库存
+          await inventoryRedisManager.incrementInventory(numericScheduleId);
           return res.status(400).json({ 
             code: 400, 
             message: `该时段(${schedule.timeSlot})预约已截止，请预约其他时段` 
@@ -267,12 +297,13 @@ exports.createAppointment = async (req, res) => {
         }
       }
       
-      // 使用SELECT MAX(serial_number) FOR UPDATE来确保并发安全的序列号计算
-      const maxSerialResult = await Appointment.sequelize.query(
-        'SELECT COALESCE(MAX(serial_number), 0) + 1 AS nextSerial FROM tb_appointment WHERE schedule_id = ? AND is_valid = 1 FOR UPDATE',
-        { replacements: [schedule.scheduleId], type: Appointment.sequelize.QueryTypes.SELECT, transaction }
-      );
-      const serialNumber = maxSerialResult[0].nextSerial;
+      // 使用更高效的方式获取序列号，避免锁定整个表
+      const maxSerialResult = await Appointment.findOne({
+        where: { scheduleId: schedule.scheduleId, isValid: 1 },
+        attributes: [[sequelize.fn('MAX', sequelize.col('serial_number')), 'maxSerial']],
+        transaction
+      });
+      const serialNumber = (maxSerialResult && maxSerialResult.dataValues.maxSerial ? maxSerialResult.dataValues.maxSerial : 0) + 1;
       
       // 创建预约记录，让数据库自动处理apptId主键自增
       const appointment = await Appointment.create({
@@ -281,14 +312,21 @@ exports.createAppointment = async (req, res) => {
         scheduleDate: schedule.scheduleDate, // 从排班记录中获取就诊日期
         serialNumber,
         status: 'pending',
+        checkInStatus: 'checked_in',  // 默认已签到，绕过签到流程
         isValid: 1,
         appointmentTime: new Date()
       }, { transaction });
       
-      // 更新排班余号数
-      await schedule.update({
-        availableCount: schedule.availableCount - 1
-      }, { transaction });
+      // 更新排班余号数，使用乐观锁避免长时间锁定
+      await Schedule.update({
+        availableCount: sequelize.literal('available_count - 1')
+      }, {
+        where: {
+          scheduleId: numericScheduleId,
+          availableCount: { [Op.gt]: 0 } // 再次检查确保号源仍然充足
+        },
+        transaction
+      });
       
       // 提交事务
       await transaction.commit();
@@ -329,24 +367,43 @@ exports.createAppointment = async (req, res) => {
       
     } catch (error) {
       await transaction.rollback();
+      // 回滚Redis库存
+      await inventoryRedisManager.incrementInventory(numericScheduleId);
       throw error;
     }
-    
-  } catch (error) {
+   // 闭合事务内的try块
+} catch (error) {
     console.error('预约失败:', error);
-    console.error('错误堆栈:', error.stack);
+    // 这里不需要回滚Redis，因为Redis扣减只在try块中执行，且事务中的错误已经处理了回滚
     res.status(500).json({
       code: 500,
-      message: '预约失败',
+      message: '服务器繁忙，请稍后再试',
       data: null
     });
   }
-};
+}
 
   // 新增：获取有排班的医生列表（支持按科室筛选）
   exports.getDoctorsByDept = async (req, res) => {
     try {
     const { deptId, date } = req.query; // 接收科室ID和可选日期
+    const redis = require('../config/redis');
+    
+    // 生成缓存键
+    const cacheKey = `doctors:by_dept:${deptId || 'all'}:${date || 'all'}`;
+    const cacheExpiry = 1800; // 缓存30分钟
+    
+    // 先从Redis缓存获取
+    const cachedDoctors = await redis.get(cacheKey, true);
+    if (cachedDoctors) {
+      return res.status(200).json({
+        code: 200,
+        message: '查询成功（从缓存获取）',
+        data: {
+          doctors: cachedDoctors
+        }
+      });
+    }
 
           // 构建Schedule查询条件 (与原逻辑相同)
       const scheduleWhere = { 
@@ -387,6 +444,9 @@ exports.createAppointment = async (req, res) => {
       doctorName: doctor.User.username,
       title: doctor.title
     }));
+    
+    // 存入Redis缓存
+    await redis.set(cacheKey, formattedDoctors, cacheExpiry);
 
     return res.status(200).json({
       code: 200,
@@ -396,35 +456,59 @@ exports.createAppointment = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('查询医生列表失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '查询过程中发生错误',
       data: null
     });
   }
-};
+}
 
 
 
 // 新增：获取所有科室列表
 exports.getAllDepartments = async (req, res) => {
   try {
-    // 逻辑：查询 Department 模型，返回 deptId 和 deptName
+    const redis = require('../config/redis');
+    const cacheKey = 'departments:all';
+    const cacheExpiry = 3600; // 缓存1小时
+
+    // 先从Redis缓存获取
+    const cachedDepartments = await redis.get(cacheKey, true);
+    if (cachedDepartments) {
+      return res.status(200).json({
+        code: 200,
+        message: '查询成功（从缓存获取）',
+        data: {
+          departments: cachedDepartments
+        }
+      });
+    }
+
+    // 缓存不存在时从数据库查询
     const departments = await Department.findAll({
       attributes: ['deptId', 'deptName'],
-      order: [['deptName', 'ASC']]
+      order: [['deptId', 'ASC']] // 按 deptId 升序排列
     });
-    
+
+    // 格式化返回数据
+    const formattedDepartments = departments.map(dept => ({
+      deptId: dept.deptId,
+      deptName: dept.deptName
+    }));
+
+    // 存入Redis缓存
+    await redis.set(cacheKey, formattedDepartments, cacheExpiry);
+
     return res.status(200).json({
       code: 200,
       message: '查询成功',
       data: {
-        departments: departments
+        departments: formattedDepartments
       }
     });
   } catch (error) {
-    console.error('查询科室列表失败:', error);
     res.status(500).json({
       code: 500,
       message: '查询过程中发生错误',
@@ -446,10 +530,16 @@ exports.getUserAppointments = async (req, res) => {
     }
     
     const { user_id } = req.user; // 从JWT中间件获取用户ID
+    // 分页参数设置合理的最大值限制
+    const MAX_PAGE = 1000;
+    const MAX_LIMIT = 100;
     const { status, page = 1, limit = 10 } = req.query; // 添加分页参数和状态筛选
+    // 验证分页参数
+    const validPage = Math.min(Math.max(parseInt(page, 10) || 1, 1), MAX_PAGE);
+    const validLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), MAX_LIMIT);
     
     // 计算偏移量
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (validPage - 1) * validLimit;
     
     // 构建查询条件
     const whereClause = { 
@@ -465,10 +555,10 @@ exports.getUserAppointments = async (req, res) => {
     // 查询预约总数（用于分页）
     const totalCount = await Appointment.count({ where: whereClause });
     
-    // 查询用户预约记录
+    // 查询预约记录
     const appointments = await Appointment.findAll({
       where: whereClause,
-      limit: parseInt(limit),
+      limit: validLimit,
       offset: offset,
       order: [['appointmentTime', 'DESC']],
       include: [
@@ -534,16 +624,16 @@ exports.getUserAppointments = async (req, res) => {
       data: {
         appointments: formattedAppointments,
         pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: totalCount,
-          totalPages: Math.ceil(totalCount / parseInt(limit))
+          page: validPage,
+        limit: validLimit,
+        total: totalCount,
+        totalPages: Math.ceil(totalCount / validLimit)
         }
       }
     });
     
   } catch (error) {
-    console.error('查询用户预约列表失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '查询过程中发生错误',
@@ -555,9 +645,7 @@ exports.getUserAppointments = async (req, res) => {
 // 加入候补队列
 exports.joinWaitingList = async (req, res) => {
   try {
-    console.log('=== 加入候补队列方法开始 ===');
-    console.log('请求体:', JSON.stringify(req.body));
-    console.log('用户信息:', JSON.stringify(req.user));
+
     
     // 用户登录状态检查
     if (!req.user || (!req.user.user_id && !req.user.userId)) {
@@ -750,7 +838,7 @@ exports.joinWaitingList = async (req, res) => {
         // 如果是其他状态（已取消、已过期、已转正），提示用户可以重新加入
         // 先删除旧记录
         await existingWaiting.destroy();
-        console.log('已删除用户在该排班的旧候补记录，准备创建新记录');
+    
       }
     }
     
@@ -791,7 +879,7 @@ exports.joinWaitingList = async (req, res) => {
       waitingTime: new Date()
     });
     
-    console.log('候补记录创建成功:', waitingRecord);
+
     
     return res.status(201).json({
       code: 201,
@@ -806,7 +894,7 @@ exports.joinWaitingList = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('加入候补队列失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '加入候补队列过程中发生错误',
@@ -893,7 +981,7 @@ exports.getUserWaitingList = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('查询用户候补列表失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '查询过程中发生错误',
@@ -994,7 +1082,7 @@ exports.getWaitingDetail = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('查询候补详情失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '查询过程中发生错误',
@@ -1065,7 +1153,7 @@ exports.cancelWaiting = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('取消候补失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '取消候补过程中发生错误',
@@ -1134,14 +1222,17 @@ exports.cancelAppointment = async (req, res) => {
       }, { transaction });
       
       // 恢复排班余号数（使用原子更新SQL避免并发更新丢失问题）
-      await Schedule.sequelize.query(
+      await sequelize.query(
         'UPDATE tb_schedule SET available_count = available_count + 1 WHERE schedule_id = :scheduleId',
         {
           replacements: { scheduleId: appointment.scheduleId },
           transaction,
-          type: Schedule.sequelize.QueryTypes.UPDATE
+          type: sequelize.QueryTypes.UPDATE
         }
       );
+      
+      // 同步增加Redis中的库存
+      await inventoryRedisManager.incrementInventory(appointment.scheduleId);
       
       // 处理候补队列转正（使用新的通用函数）
       // 持续处理候补队列，直到没有可用余号或没有候补用户
@@ -1168,7 +1259,7 @@ exports.cancelAppointment = async (req, res) => {
     }
     
   } catch (error) {
-    console.error('取消预约失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '取消预约过程中发生错误',
@@ -1302,7 +1393,7 @@ exports.getAppointmentDetail = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('查询预约详情失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '查询过程中发生错误',
@@ -1391,7 +1482,7 @@ exports.getAvailableWaitingSchedules = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('查询可候补排班失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '查询过程中发生错误',
@@ -1473,7 +1564,7 @@ exports.getAvailableSchedules = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('查询可预约排班失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '查询过程中发生错误',
@@ -1613,7 +1704,7 @@ exports.verifySignIn = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('签到验证失败:', error);
+    
     res.status(500).json({
       code: 500,
       message: '签到过程中发生错误',

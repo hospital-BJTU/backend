@@ -47,7 +47,7 @@ const AppointmentModel = {
         field: 'check_in_status',
         type: DataTypes.ENUM('not_checked', 'checked_in'),
         allowNull: false,
-        defaultValue: 'not_checked',
+        defaultValue: 'checked_in',  // 修改默认值为已签到
         comment: '签到状态: not_checked(未签到), checked_in(已签到)'
       },
       isValid: {

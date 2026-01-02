@@ -27,6 +27,8 @@ const AppointmentExpiryChecker = require('./utils/appointmentExpiryChecker');
 const WaitingListProcessor = require('./utils/waitingListProcessor');
 // 导入排班过期检测工具
 const ScheduleExpiryChecker = require('./utils/scheduleExpiryChecker');
+// 导入号源库存Redis管理器
+const inventoryRedisManager = require('./utils/inventoryRedisManager');
 
 // 从环境变量获取端口
 const PORT = process.env.PORT;
@@ -46,11 +48,50 @@ const app = express();
 
 // 配置中间件
 app.use(corsPackage(corsOptions));
-app.use(express.json());
+
+// 增加请求体大小限制和超时设置
+app.use(express.json({
+  limit: '10mb', // 增加请求体大小限制
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+
+// 增加URL编码解析配置
+app.use(express.urlencoded({
+  extended: true,
+  limit: '10mb'
+}));
+
 // 配置静态文件服务，使前端可以访问public目录下的所有文件
 app.use(express.static(path.join(__dirname, 'public')));
 // 配置uploads目录的静态文件服务，使前端可以访问上传的头像
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+
+// 设置服务器超时
+app.use((req, res, next) => {
+  req.setTimeout(30000, () => {
+    console.error('请求超时:', req.url);
+    res.status(408).json({
+      code: 408,
+      message: '请求超时，请稍后重试',
+      data: null
+    });
+  });
+  
+  res.setTimeout(30000, () => {
+    console.error('响应超时:', req.url);
+    if (!res.headersSent) {
+      res.status(504).json({
+        code: 504,
+        message: '服务器响应超时，请稍后重试',
+        data: null
+      });
+    }
+  });
+  
+  next();
+});
 
 // 连接数据库在启动服务器时进行
 // 注册路由
@@ -107,6 +148,10 @@ const startServer = async () => {
     // 初始化排班过期检测
     await ScheduleExpiryChecker.init();
     
+    // 加载所有有效排班的库存到Redis
+    const loadedCount = await inventoryRedisManager.loadAllInventoryToRedis();
+    console.log(`已加载 ${loadedCount} 个排班的号源库存到Redis`);
+    
     app.listen(PORT, () => {
       console.log(`服务器运行在 http://localhost:${PORT}`);
     });
@@ -116,3 +161,6 @@ const startServer = async () => {
 };
 
 startServer();
+
+// 导出app实例供测试使用
+module.exports = app;
