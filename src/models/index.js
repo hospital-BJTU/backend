@@ -1,5 +1,5 @@
 // 导入数据库配置
-const { sequelize } = require('../config/database');
+const { sequelize, Op } = require('../config/database');
 
 // 导入所有模型模块
 const userModelModule = require('./User');
@@ -90,6 +90,7 @@ WaitingList.belongsTo(Appointment, { foreignKey: 'converted_to_appt_id', as: 'Co
 // 导出模型，同时确保命名一致性
 module.exports = {
   sequelize,
+  Op,
   User,
   UserProfile,
   Department,

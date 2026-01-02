@@ -150,7 +150,7 @@ class WaitingListProcessor {
             scheduleDate: scheduleDate, // 添加必填的排班日期
             serialNumber: nextSerialNumber++,
             status: APPOINTMENT_STATUS.PENDING,
-            checkInStatus: 'not_checked',
+            checkInStatus: 'checked_in',  // 修改为默认已签到
             isValid: 1
           }, { transaction });
 
